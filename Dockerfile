@@ -1,4 +1,4 @@
-# Multi-arch friendly (amd64 / arm64) — Node + better-sqlite3 native build
+# Multi-arch friendly (amd64 / arm64) — Node + better-sqlite3 native build + ffmpeg
 FROM node:20-bookworm-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,7 +16,7 @@ RUN npm run build && npm prune --omit=dev
 FROM node:20-bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
+    python3 make g++ ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -33,7 +33,10 @@ COPY public ./public
 ENV MEDIA_PATH=/media \
     DATA_PATH=/data \
     PORT=8096 \
-    NODE_ENV=production
+    NODE_ENV=production \
+    TRANSCODE_ENABLED=true \
+    FFMPEG_PATH=ffmpeg \
+    TRANSCODE_MAX_JOBS=1
 
 EXPOSE 8096
 VOLUME ["/media", "/data"]

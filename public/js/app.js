@@ -6,6 +6,8 @@
     library: null, // selected library object
     drill: null, // show name / artist
     currentItem: null,
+    playMode: 'direct', // direct | compatible
+    hls: null,
     q: '',
     editUserId: null,
     editLibId: null,
@@ -331,6 +333,8 @@
           </div>
           <div class="actions">
             <button class="btn btn-primary btn-play" type="button">Lire</button>
+            <button class="btn btn-dl" type="button">Télécharger</button>
+            <button class="btn btn-vlc" type="button">VLC</button>
             ${shareBtn}
           </div>
         </div>`;
@@ -342,32 +346,176 @@
     content.querySelectorAll('.list-item').forEach((row) => {
       const id = Number(row.getAttribute('data-id'));
       row.querySelector('.btn-play').addEventListener('click', () => playById(id));
+      const dl = row.querySelector('.btn-dl');
+      if (dl) dl.addEventListener('click', (e) => { e.stopPropagation(); downloadMedia(id); });
+      const vlc = row.querySelector('.btn-vlc');
+      if (vlc) vlc.addEventListener('click', (e) => { e.stopPropagation(); openVlcModal(id); });
       const sh = row.querySelector('.btn-share');
       if (sh) sh.addEventListener('click', () => openShareModal(id));
     });
   }
 
-  async function playById(id) {
-    const item = await api('/api/media/' + id);
-    state.currentItem = item;
-    $('nowPlaying').textContent = item.title;
-    $('playerPanel').classList.remove('hidden');
-    $('btnShareCurrent').classList.toggle('hidden', !canShare());
+  function destroyHls() {
+    if (state.hls) {
+      try { state.hls.destroy(); } catch {}
+      state.hls = null;
+    }
+  }
+
+  function setModeButtons(mode) {
+    state.playMode = mode;
+    document.querySelectorAll('.mode-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+  }
+
+  function updatePlayerChrome(item) {
+    const isVideo = item.type !== 'track';
+    $('modeToggle').classList.toggle('hidden', !isVideo);
+    const hint = item.playback?.reason || '';
+    const extra = isVideo
+      ? ' Direct = fichier original. Compatible = ffmpeg H.264+AAC stéréo (pas de DTS dans le navigateur). VLC pour le Remux / 5.1.'
+      : ' Téléchargez ou ouvrez dans VLC pour tous les codecs audio.';
+    $('playerHint').textContent = hint + extra;
+    $('btnM3u').href = '/api/media/' + item.id + '/playlist.m3u';
+  }
+
+  async function playDirect(item) {
+    destroyHls();
     const video = $('videoPlayer');
     const audio = $('audioPlayer');
-    const src = '/api/stream/' + id;
+    const src = '/api/stream/' + item.id;
     if (item.type === 'track') {
       video.classList.add('hidden');
       video.removeAttribute('src');
       audio.classList.remove('hidden');
       audio.src = src;
       audio.play().catch(() => {});
-    } else {
-      audio.classList.add('hidden');
-      audio.removeAttribute('src');
-      video.classList.remove('hidden');
-      video.src = src;
+      return;
+    }
+    audio.classList.add('hidden');
+    audio.removeAttribute('src');
+    video.classList.remove('hidden');
+    video.src = src;
+    const onErr = () => {
+      video.removeEventListener('error', onErr);
+      if (item.transcodeEnabled !== false) {
+        $('playerHint').textContent = 'Lecture Directe impossible — bascule en Compatible (H.264+AAC)…';
+        setModeButtons('compatible');
+        playCompatible(item);
+      }
+    };
+    video.addEventListener('error', onErr);
+    video.play().catch(() => {});
+  }
+
+  async function playCompatible(item) {
+    destroyHls();
+    const video = $('videoPlayer');
+    const audio = $('audioPlayer');
+    audio.classList.add('hidden');
+    audio.removeAttribute('src');
+    video.classList.remove('hidden');
+    video.removeAttribute('src');
+
+    $('playerHint').textContent = 'Démarrage du transcodage Compatible (H.264 + AAC stéréo)… CPU Synology sollicité.';
+    let info;
+    try {
+      info = await api('/api/stream/' + item.id + '/hls');
+    } catch (e) {
+      $('playerHint').textContent = 'Compatible indisponible : ' + e.message + ' — utilisez VLC.';
+      return;
+    }
+
+    const playlistUrl = info.playlistUrl || ('/api/stream/' + item.id + '/hls/playlist.m3u8');
+
+    async function waitPlaylist(retries) {
+      for (let i = 0; i < retries; i++) {
+        const res = await fetch(playlistUrl, { credentials: 'same-origin' });
+        if (res.ok) {
+          const ct = res.headers.get('content-type') || '';
+          if (ct.includes('mpegurl') || ct.includes('application/vnd.apple.mpegurl') || ct.includes('audio/mpegurl')) {
+            return true;
+          }
+          // might be JSON 202 served as ok? check
+          const text = await res.text();
+          if (text.trim().startsWith('#EXTM3U')) return true;
+        }
+        if (res.status === 202) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+      return false;
+    }
+
+    const ready = await waitPlaylist(40);
+    if (!ready) {
+      $('playerHint').textContent = 'Transcodage trop long / échec. Préférez VLC en LAN pour les gros Remux.';
+      return;
+    }
+
+    if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+      state.hls = hls;
+      hls.loadSource(playlistUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          $('playerHint').textContent = 'Erreur HLS — réessayez Compatible ou ouvrez dans VLC.';
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = playlistUrl;
       video.play().catch(() => {});
+    } else {
+      $('playerHint').textContent = 'HLS non supporté par ce navigateur — utilisez VLC.';
+    }
+  }
+
+  async function playById(id, forceMode) {
+    const item = await api('/api/media/' + id);
+    state.currentItem = item;
+    $('nowPlaying').textContent = item.title;
+    $('playerPanel').classList.remove('hidden');
+    $('btnShareCurrent').classList.toggle('hidden', !canShare());
+    updatePlayerChrome(item);
+
+    let mode = forceMode;
+    if (!mode) {
+      if (item.type === 'track') mode = 'direct';
+      else if (item.playback && item.playback.suggestedMode === 'compatible' && item.transcodeEnabled !== false) {
+        mode = 'compatible';
+      } else {
+        mode = 'direct';
+      }
+    }
+    setModeButtons(mode);
+    if (mode === 'compatible' && item.type !== 'track') await playCompatible(item);
+    else await playDirect(item);
+  }
+
+  function downloadMedia(id) {
+    window.location.href = '/api/media/' + id + '/download';
+  }
+
+  async function openVlcModal(id) {
+    try {
+      const data = await api('/api/media/' + id + '/vlc');
+      $('vlcUrl').value = data.streamUrl;
+      $('vlcM3uLink').href = data.m3uUrl;
+      $('vlcCopied').classList.add('hidden');
+      $('vlcModal').classList.remove('hidden');
+      try {
+        await navigator.clipboard.writeText(data.streamUrl);
+        $('vlcCopied').classList.remove('hidden');
+      } catch {}
+    } catch (e) {
+      alert(e.message);
     }
   }
 
@@ -598,12 +746,39 @@
 
   $('btnClosePlayer').addEventListener('click', () => {
     $('playerPanel').classList.add('hidden');
+    destroyHls();
     $('videoPlayer').pause();
+    $('videoPlayer').removeAttribute('src');
     $('audioPlayer').pause();
+    $('audioPlayer').removeAttribute('src');
   });
 
   $('btnShareCurrent').addEventListener('click', () => {
     if (state.currentItem) openShareModal(state.currentItem.id);
+  });
+
+  $('btnModeDirect').addEventListener('click', () => {
+    if (!state.currentItem) return;
+    setModeButtons('direct');
+    playDirect(state.currentItem);
+  });
+  $('btnModeCompat').addEventListener('click', () => {
+    if (!state.currentItem || state.currentItem.type === 'track') return;
+    setModeButtons('compatible');
+    playCompatible(state.currentItem);
+  });
+  $('btnDownload').addEventListener('click', () => {
+    if (state.currentItem) downloadMedia(state.currentItem.id);
+  });
+  $('btnVlc').addEventListener('click', () => {
+    if (state.currentItem) openVlcModal(state.currentItem.id);
+  });
+  $('vlcClose').addEventListener('click', () => $('vlcModal').classList.add('hidden'));
+  $('vlcCopy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('vlcUrl').value);
+      $('vlcCopied').classList.remove('hidden');
+    } catch {}
   });
 
   $('shareCancel').addEventListener('click', () => $('shareModal').classList.add('hidden'));

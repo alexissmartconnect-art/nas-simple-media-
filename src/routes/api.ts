@@ -25,6 +25,24 @@ import {
   libraryWithStats,
   getLibraryAccessMap,
 } from '../libraries/libraries';
+import {
+  createStreamToken,
+  resolveStreamToken,
+  buildRawStreamUrl,
+  buildShareRawStreamUrl,
+  buildM3uContent,
+} from '../auth/streamTokens';
+import { getPlaybackHint } from '../transcode/formats';
+import {
+  ensureTranscode,
+  getJobStatus,
+  getSegmentFile,
+  readPlaylist,
+  isTranscodeEnabled,
+  touchJob,
+} from '../transcode/hls';
+import fs from 'fs';
+import path from 'path';
 
 export const apiRouter = Router();
 
@@ -150,7 +168,12 @@ apiRouter.get('/media/:id', requireAuth, (req, res) => {
     res.status(404).json({ error: 'Not found' });
     return;
   }
-  res.json(item);
+  const playback = getPlaybackHint(item.filename || item.path, item.type);
+  res.json({
+    ...item,
+    playback,
+    transcodeEnabled: isTranscodeEnabled(),
+  });
 });
 
 apiRouter.get('/series', requireAuth, (req, res) => {
@@ -205,12 +228,53 @@ apiRouter.get('/artists', requireAuth, (req, res) => {
   res.json({ artists: rows });
 });
 
-apiRouter.get('/stream/:id', requireAuth, (req, res) => {
-  const user = okUser(req as AuthedRequest);
+function getAccessibleMedia(user: ReturnType<typeof okUser>, id: number): MediaItem | null {
   const item = getDb()
     .prepare('SELECT * FROM media_items WHERE id = ?')
-    .get(Number(req.params.id)) as MediaItem | undefined;
-  if (!item || !userCanAccessLibrary(user, item.library_id)) {
+    .get(id) as MediaItem | undefined;
+  if (!item || !userCanAccessLibrary(user, item.library_id)) return null;
+  return item;
+}
+
+function authStreamOrToken(
+  req: import('express').Request,
+  res: import('express').Response,
+  mediaId: number,
+  scope: 'raw' | 'download' | 'hls'
+): MediaItem | null {
+  const qToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  if (qToken) {
+    const data = resolveStreamToken(qToken, { mediaId, scope });
+    if (!data) {
+      res.status(401).json({ error: 'Invalid or expired stream token' });
+      return null;
+    }
+    const item = getDb()
+      .prepare('SELECT * FROM media_items WHERE id = ?')
+      .get(mediaId) as MediaItem | undefined;
+    if (!item) {
+      res.status(404).json({ error: 'Not found' });
+      return null;
+    }
+    return item;
+  }
+  const user = getSessionUser(req.cookies?.[config.COOKIE_NAME]);
+  if (!user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+  const item = getAccessibleMedia(user, mediaId);
+  if (!item) {
+    res.status(404).json({ error: 'Not found' });
+    return null;
+  }
+  return item;
+}
+
+apiRouter.get('/stream/:id', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item) {
     res.status(404).json({ error: 'Not found' });
     return;
   }
@@ -219,6 +283,154 @@ apiRouter.get('/stream/:id', requireAuth, (req, res) => {
     return;
   }
   streamFile(item.path, req, res);
+});
+
+/** Original file with Range — cookie or ?token= (for VLC). */
+apiRouter.get('/stream/:id/raw', (req, res) => {
+  const mediaId = Number(req.params.id);
+  const item = authStreamOrToken(req, res, mediaId, 'raw');
+  if (!item) return;
+  if (!isPathAllowed(item.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  streamFile(item.path, req, res);
+});
+
+/** Download original file (attachment). */
+apiRouter.get('/media/:id/download', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  if (!isPathAllowed(item.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  streamFile(item.path, req, res, { download: true, filename: item.filename });
+});
+
+/** Issue VLC / external player URLs + optional .m3u. */
+apiRouter.get('/media/:id/vlc', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const token = createStreamToken({ mediaId: item.id, userId: user.id, scope: 'raw' });
+  const streamUrl = buildRawStreamUrl(item.id, token);
+  const m3uUrl = `${config.PUBLIC_BASE_URL}/api/media/${item.id}/playlist.m3u?token=${encodeURIComponent(token)}`;
+  res.json({
+    streamUrl,
+    m3uUrl,
+    vlcUri: `vlc://${streamUrl.replace(/^https?:\/\//, '')}`,
+    help:
+      'Dans VLC : Média → Ouvrir un flux réseau → collez streamUrl. Ou en CLI : vlc "<streamUrl>". ' +
+      'Le fichier .m3u ouvre directement le flux authentifié. VLC lit DTS/AC3 5.1 ; le mode Compatible navigateur downmixe en AAC stéréo.',
+    expiresInMs: config.STREAM_TOKEN_TTL_MS,
+  });
+});
+
+apiRouter.get('/media/:id/playlist.m3u', (req, res) => {
+  const mediaId = Number(req.params.id);
+  const item = authStreamOrToken(req, res, mediaId, 'raw');
+  if (!item) return;
+  const qToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  let token = qToken;
+  if (!token) {
+    const user = getSessionUser(req.cookies?.[config.COOKIE_NAME]);
+    if (!user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    token = createStreamToken({ mediaId: item.id, userId: user.id, scope: 'raw' });
+  }
+  const streamUrl = buildRawStreamUrl(item.id, token);
+  const body = buildM3uContent(item.title, streamUrl);
+  res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent((item.title || 'media').replace(/[^\w.\- ]+/g, '_') + '.m3u')}`
+  );
+  res.send(body);
+});
+
+/** HLS Compatible mode — start ffmpeg job + return status / playlist URL. */
+apiRouter.get('/stream/:id/hls', (req, res) => {
+  const mediaId = Number(req.params.id);
+  const item = authStreamOrToken(req, res, mediaId, 'hls');
+  if (!item) return;
+  if (item.type === 'track') {
+    res.status(400).json({ error: 'HLS Compatible est réservé à la vidéo' });
+    return;
+  }
+  if (!isPathAllowed(item.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  if (!isTranscodeEnabled()) {
+    res.status(503).json({
+      error: 'Transcodage désactivé. Utilisez Direct ou VLC.',
+      enabled: false,
+    });
+    return;
+  }
+  const st = ensureTranscode(mediaId, item.path);
+  const qToken = typeof req.query.token === 'string' ? req.query.token : '';
+  const tokenQs = qToken ? `?token=${encodeURIComponent(qToken)}` : '';
+  res.json({
+    ...st,
+    playlistUrl: `/api/stream/${mediaId}/hls/playlist.m3u8${tokenQs}`,
+    note: 'Compatible = H.264 + AAC stéréo (downmix). Pas de passthrough DTS dans le navigateur.',
+  });
+});
+
+apiRouter.get('/stream/:id/hls/playlist.m3u8', (req, res) => {
+  const mediaId = Number(req.params.id);
+  const item = authStreamOrToken(req, res, mediaId, 'hls');
+  if (!item) return;
+  if (!isTranscodeEnabled()) {
+    res.status(503).json({ error: 'Transcodage désactivé' });
+    return;
+  }
+  ensureTranscode(mediaId, item.path);
+  const body = readPlaylist(mediaId);
+  if (!body) {
+    res.status(202).json({
+      error: 'Transcodage en cours',
+      status: getJobStatus(mediaId).status,
+      retryAfterMs: 1500,
+    });
+    return;
+  }
+  touchJob(mediaId);
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(body);
+});
+
+apiRouter.get('/stream/:id/hls/:segment', (req, res) => {
+  const mediaId = Number(req.params.id);
+  const item = authStreamOrToken(req, res, mediaId, 'hls');
+  if (!item) return;
+  const name = path.basename(req.params.segment);
+  const file = getSegmentFile(mediaId, name);
+  if (!file) {
+    res.status(404).json({ error: 'Segment not found' });
+    return;
+  }
+  touchJob(mediaId);
+  const ct = name.endsWith('.m3u8')
+    ? 'application/vnd.apple.mpegurl'
+    : name.endsWith('.ts')
+      ? 'video/mp2t'
+      : 'application/octet-stream';
+  res.setHeader('Content-Type', ct);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  fs.createReadStream(file).pipe(res);
 });
 
 apiRouter.get('/status', requireAuth, (req, res) => {
@@ -240,6 +452,11 @@ apiRouter.get('/status', requireAuth, (req, res) => {
     counts,
     lastScan: last?.value || null,
     user,
+    transcode: {
+      enabled: isTranscodeEnabled(),
+      maxJobs: config.TRANSCODE_MAX_JOBS,
+      ffmpegPath: config.FFMPEG_PATH,
+    },
   });
 });
 
@@ -398,6 +615,7 @@ apiRouter.get('/public/share/:token', (req, res) => {
     res.json({ needsPassword: true, title: access.media.title, type: access.media.type });
     return;
   }
+  const playback = getPlaybackHint(access.media.filename || access.media.path, access.media.type);
   res.json({
     needsPassword: false,
     id: access.media.id,
@@ -409,6 +627,9 @@ apiRouter.get('/public/share/:token', (req, res) => {
     show_name: access.media.show_name,
     season: access.media.season,
     episode: access.media.episode,
+    filename: access.media.filename,
+    playback,
+    transcodeEnabled: isTranscodeEnabled(),
   });
 });
 
@@ -430,6 +651,199 @@ apiRouter.get('/public/stream/:token', (req, res) => {
   }
   incrementShareUse(req.params.token);
   streamFile(access.media.path, req, res);
+});
+
+/** Alias for VLC: same as public stream (original + Range). */
+apiRouter.get('/public/stream/:token/raw', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!isPathAllowed(access.media.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  streamFile(access.media.path, req, res);
+});
+
+apiRouter.get('/public/download/:token', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!isPathAllowed(access.media.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  streamFile(access.media.path, req, res, {
+    download: true,
+    filename: access.media.filename,
+  });
+});
+
+apiRouter.get('/public/vlc/:token', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  const streamUrl = buildShareRawStreamUrl(req.params.token, password);
+  const m3uUrl =
+    `${config.PUBLIC_BASE_URL}/api/public/playlist/${encodeURIComponent(req.params.token)}` +
+    (password ? `?password=${encodeURIComponent(password)}` : '');
+  res.json({
+    streamUrl,
+    m3uUrl,
+    vlcUri: `vlc://${streamUrl.replace(/^https?:\/\//, '')}`,
+    help:
+      'VLC : Média → Ouvrir un flux réseau, ou téléchargez le .m3u. VLC lit le fichier original (DTS 5.1 inclus).',
+  });
+});
+
+apiRouter.get('/public/playlist/:token', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  const streamUrl = buildShareRawStreamUrl(req.params.token, password);
+  const body = buildM3uContent(access.media.title, streamUrl);
+  res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent((access.media.title || 'share').replace(/[^\w.\- ]+/g, '_') + '.m3u')}`
+  );
+  res.send(body);
+});
+
+apiRouter.get('/public/hls/:token', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (access.media.type === 'track') {
+    res.status(400).json({ error: 'HLS Compatible est réservé à la vidéo' });
+    return;
+  }
+  if (!isPathAllowed(access.media.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  if (!isTranscodeEnabled()) {
+    res.status(503).json({ error: 'Transcodage désactivé', enabled: false });
+    return;
+  }
+  const st = ensureTranscode(access.media.id, access.media.path);
+  const pw = password ? `?password=${encodeURIComponent(password)}` : '';
+  res.json({
+    ...st,
+    playlistUrl: `/api/public/hls/${encodeURIComponent(req.params.token)}/playlist.m3u8${pw}`,
+  });
+});
+
+apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!isTranscodeEnabled()) {
+    res.status(503).json({ error: 'Transcodage désactivé' });
+    return;
+  }
+  ensureTranscode(access.media.id, access.media.path);
+  let body = readPlaylist(access.media.id);
+  if (!body) {
+    res.status(202).json({
+      error: 'Transcodage en cours',
+      status: getJobStatus(access.media.id).status,
+      retryAfterMs: 1500,
+    });
+    return;
+  }
+  if (password) {
+    const q = `?password=${encodeURIComponent(password)}`;
+    body = body
+      .split('\n')
+      .map((line) => {
+        const t = line.trim();
+        if (!t || t.startsWith('#')) return line;
+        if (t.includes('?')) return line;
+        return `${t}${q}`;
+      })
+      .join('\n');
+  }
+  touchJob(access.media.id);
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(body);
+});
+
+apiRouter.get('/public/hls/:token/:segment', (req, res) => {
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const access = resolveShare(req.params.token, password);
+  if (!access.ok) {
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  const name = path.basename(req.params.segment);
+  const file = getSegmentFile(access.media.id, name);
+  if (!file) {
+    res.status(404).json({ error: 'Segment not found' });
+    return;
+  }
+  touchJob(access.media.id);
+  const ct = name.endsWith('.m3u8')
+    ? 'application/vnd.apple.mpegurl'
+    : name.endsWith('.ts')
+      ? 'video/mp2t'
+      : 'application/octet-stream';
+  res.setHeader('Content-Type', ct);
+  fs.createReadStream(file).pipe(res);
 });
 
 export function runInitialScan(): void {

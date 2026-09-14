@@ -5,6 +5,7 @@ import { config } from './config';
 import { getDb } from './db/schema';
 import { apiRouter, runInitialScan } from './routes/api';
 import { getSessionUser } from './auth/session';
+import { startCacheCleaner } from './transcode/hls';
 
 const app = express();
 
@@ -34,10 +35,12 @@ app.get('/', (req, res) => {
 
 getDb();
 runInitialScan();
+startCacheCleaner();
 
 app.listen(config.PORT, '0.0.0.0', () => {
   console.log(`nas-simple-media listening on http://0.0.0.0:${config.PORT}`);
   console.log(`MEDIA_PATH=${config.MEDIA_PATH}`);
   console.log(`DATA_PATH=${config.DATA_PATH}`);
+  console.log(`TRANSCODE_ENABLED=${config.TRANSCODE_ENABLED} FFMPEG=${config.FFMPEG_PATH} maxJobs=${config.TRANSCODE_MAX_JOBS}`);
   console.log(`Default admin user: admin / (ADMIN_PASSWORD)`);
 });

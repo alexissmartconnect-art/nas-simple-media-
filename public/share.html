@@ -25,6 +25,18 @@
     <div id="playerBox" class="hidden">
       <h2 id="title" class="section-title"></h2>
       <p class="muted" id="meta"></p>
+      <div class="player-toolbar" style="margin:0.75rem 0">
+        <div class="mode-toggle" id="modeToggle">
+          <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
+          <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
+        </div>
+        <div class="player-actions">
+          <a class="btn" id="btnDownload" href="#">Télécharger</a>
+          <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
+          <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
+        </div>
+        <p class="muted player-hint" id="playerHint"></p>
+      </div>
       <div style="margin-top:1rem">
         <video id="video" controls playsinline class="hidden"></video>
         <audio id="audio" controls class="hidden"></audio>
@@ -32,12 +44,98 @@
     </div>
     <div id="errBox" class="empty hidden"></div>
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
   <script>
     const token = location.pathname.split('/').pop();
     let password = '';
+    let meta = null;
+    let hls = null;
+    let playMode = 'direct';
+
+    function pwQs() {
+      return password ? ('?password=' + encodeURIComponent(password)) : '';
+    }
+
+    function destroyHls() {
+      if (hls) { try { hls.destroy(); } catch {} hls = null; }
+    }
+
+    function setMode(mode) {
+      playMode = mode;
+      document.querySelectorAll('.mode-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+      });
+    }
+
+    async function playDirect() {
+      destroyHls();
+      const stream = '/api/public/stream/' + encodeURIComponent(token) + pwQs();
+      const video = document.getElementById('video');
+      const audio = document.getElementById('audio');
+      if (meta.type === 'track') {
+        audio.classList.remove('hidden');
+        video.classList.add('hidden');
+        audio.src = stream;
+        audio.play().catch(() => {});
+      } else {
+        video.classList.remove('hidden');
+        audio.classList.add('hidden');
+        video.src = stream;
+        const onErr = () => {
+          video.removeEventListener('error', onErr);
+          if (meta.transcodeEnabled !== false) {
+            document.getElementById('playerHint').textContent = 'Direct impossible — bascule Compatible…';
+            setMode('compatible');
+            playCompatible();
+          }
+        };
+        video.addEventListener('error', onErr);
+        video.play().catch(() => {});
+      }
+    }
+
+    async function playCompatible() {
+      destroyHls();
+      const video = document.getElementById('video');
+      const audio = document.getElementById('audio');
+      audio.classList.add('hidden');
+      video.classList.remove('hidden');
+      video.removeAttribute('src');
+      document.getElementById('playerHint').textContent = 'Transcodage Compatible (H.264+AAC stéréo)…';
+      const res = await fetch('/api/public/hls/' + encodeURIComponent(token) + pwQs());
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        document.getElementById('playerHint').textContent = data.error || 'Compatible indisponible — utilisez VLC.';
+        return;
+      }
+      const playlistUrl = data.playlistUrl;
+      for (let i = 0; i < 40; i++) {
+        const r = await fetch(playlistUrl, { credentials: 'same-origin' });
+        if (r.ok) {
+          const t = await r.clone().text();
+          if (t.trim().startsWith('#EXTM3U')) break;
+        }
+        await new Promise((x) => setTimeout(x, 1200));
+        if (i === 39) {
+          document.getElementById('playerHint').textContent = 'Transcodage trop long — préférez VLC.';
+          return;
+        }
+      }
+      if (window.Hls && Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(playlistUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = playlistUrl;
+        video.play().catch(() => {});
+      } else {
+        document.getElementById('playerHint').textContent = 'HLS non supporté — utilisez VLC.';
+      }
+    }
 
     async function load() {
-      const url = '/api/public/share/' + encodeURIComponent(token) + (password ? ('?password=' + encodeURIComponent(password)) : '');
+      const url = '/api/public/share/' + encodeURIComponent(token) + pwQs();
       const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -53,6 +151,7 @@
         document.getElementById('playerBox').classList.add('hidden');
         return;
       }
+      meta = data;
       document.getElementById('pwdBox').classList.add('hidden');
       document.getElementById('playerBox').classList.remove('hidden');
       document.getElementById('title').textContent = data.title;
@@ -61,20 +160,18 @@
       if (data.artist) bits.push(data.artist + (data.album ? ' — ' + data.album : ''));
       bits.push(data.type);
       document.getElementById('meta').textContent = bits.join(' · ');
-      const stream = '/api/public/stream/' + encodeURIComponent(token) + (password ? ('?password=' + encodeURIComponent(password)) : '');
-      const video = document.getElementById('video');
-      const audio = document.getElementById('audio');
-      if (data.type === 'track') {
-        audio.classList.remove('hidden');
-        video.classList.add('hidden');
-        audio.src = stream;
-        audio.play().catch(() => {});
-      } else {
-        video.classList.remove('hidden');
-        audio.classList.add('hidden');
-        video.src = stream;
-        video.play().catch(() => {});
-      }
+      document.getElementById('btnDownload').href = '/api/public/download/' + encodeURIComponent(token) + pwQs();
+      document.getElementById('btnM3u').href = '/api/public/playlist/' + encodeURIComponent(token) + pwQs();
+      document.getElementById('modeToggle').classList.toggle('hidden', data.type === 'track');
+      document.getElementById('playerHint').textContent =
+        (data.playback && data.playback.reason ? data.playback.reason + ' — ' : '') +
+        'Direct = original. Compatible = H.264+AAC stéréo. VLC pour DTS 5.1.';
+
+      const mode = (data.type !== 'track' && data.playback && data.playback.suggestedMode === 'compatible' && data.transcodeEnabled !== false)
+        ? 'compatible' : 'direct';
+      setMode(mode);
+      if (mode === 'compatible') playCompatible();
+      else playDirect();
     }
 
     document.getElementById('pwdBtn').addEventListener('click', () => {
@@ -87,6 +184,15 @@
           document.getElementById('pwdErr').classList.remove('hidden');
         }
       });
+    });
+    document.getElementById('btnModeDirect').addEventListener('click', () => { setMode('direct'); playDirect(); });
+    document.getElementById('btnModeCompat').addEventListener('click', () => { if (meta && meta.type !== 'track') { setMode('compatible'); playCompatible(); } });
+    document.getElementById('btnVlc').addEventListener('click', async () => {
+      const res = await fetch('/api/public/vlc/' + encodeURIComponent(token) + pwQs());
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error || 'Erreur'); return; }
+      try { await navigator.clipboard.writeText(data.streamUrl); } catch {}
+      alert('URL VLC copiee:\n\n' + data.streamUrl + '\n\n' + (data.help || ''));
     });
     load();
   </script>

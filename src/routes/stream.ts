@@ -4,7 +4,7 @@ import type { Request, Response } from 'express';
 import mime from 'mime-types';
 import { config } from '../config';
 
-export function streamFile(absPath: string, req: Request, res: Response): void {
+export function streamFile(absPath: string, req: Request, res: Response, opts?: { download?: boolean; filename?: string }): void {
   if (!fs.existsSync(absPath)) {
     res.status(404).json({ error: 'File not found' });
     return;
@@ -12,12 +12,18 @@ export function streamFile(absPath: string, req: Request, res: Response): void {
 
   const stat = fs.statSync(absPath);
   const size = stat.size;
-  const contentType = mime.lookup(absPath) || 'application/octet-stream';
+  const contentType = opts?.download
+    ? 'application/octet-stream'
+    : mime.lookup(absPath) || 'application/octet-stream';
   const range = req.headers.range;
+  const downloadName = opts?.filename || path.basename(absPath);
 
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Content-Type', contentType);
   res.setHeader('Cache-Control', 'private, max-age=3600');
+  if (opts?.download) {
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
+  }
 
   if (!range) {
     res.setHeader('Content-Length', size);

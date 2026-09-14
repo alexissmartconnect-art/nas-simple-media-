@@ -1,7 +1,7 @@
 services:
   nas-simple-media:
     build: .
-    image: nas-simple-media:1.0.0
+    image: nas-simple-media:1.1.0
     container_name: nas-simple-media
     restart: unless-stopped
     ports:
@@ -13,6 +13,10 @@ services:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-changeme}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8096}"
       ENABLE_WATCH: "${ENABLE_WATCH:-1}"
+      TRANSCODE_ENABLED: "${TRANSCODE_ENABLED:-true}"
+      FFMPEG_PATH: "${FFMPEG_PATH:-ffmpeg}"
+      # Synology CPU is weak — keep 1 (or 2 max)
+      TRANSCODE_MAX_JOBS: "${TRANSCODE_MAX_JOBS:-1}"
     volumes:
       # Synology: replace host paths with your shared folders
       - /volume1/media:/media:ro

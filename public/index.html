@@ -41,13 +41,43 @@
     <div class="player-inner">
       <div class="player-head">
         <h3 id="nowPlaying">Lecture</h3>
-        <div style="display:flex;gap:0.4rem">
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
           <button class="btn" id="btnShareCurrent" type="button">Partager</button>
           <button class="btn btn-ghost" id="btnClosePlayer" type="button">Fermer</button>
         </div>
       </div>
+      <div class="player-toolbar" id="playerToolbar">
+        <div class="mode-toggle" id="modeToggle">
+          <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
+          <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
+        </div>
+        <div class="player-actions">
+          <button class="btn" type="button" id="btnDownload">Télécharger</button>
+          <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
+          <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
+        </div>
+        <p class="muted player-hint" id="playerHint"></p>
+      </div>
       <video id="videoPlayer" controls playsinline class="hidden"></video>
       <audio id="audioPlayer" controls class="hidden"></audio>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="vlcModal">
+    <div class="modal" style="width:min(520px,100%)">
+      <h2>Ouvrir dans VLC</h2>
+      <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / AC3 5.1 inclus). Le mode Compatible navigateur downmixe en AAC stéréo.</p>
+      <div class="field">
+        <label>URL flux réseau</label>
+        <input id="vlcUrl" type="text" readonly />
+      </div>
+      <p class="muted" style="font-size:0.85rem">VLC → Média → Ouvrir un flux réseau… (Ctrl+N) — collez l’URL.<br/>CLI : <code>vlc "&lt;url&gt;"</code></p>
+      <p class="ok hidden" id="vlcCopied">URL copiée dans le presse-papiers</p>
+      <div class="modal-actions">
+        <a class="btn" id="vlcM3uLink" href="#" download>Télécharger .m3u</a>
+        <button class="btn btn-primary" id="vlcCopy" type="button">Copier l’URL</button>
+        <button class="btn btn-ghost" id="vlcClose" type="button">Fermer</button>
+      </div>
     </div>
   </div>
 
@@ -142,6 +172,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>
