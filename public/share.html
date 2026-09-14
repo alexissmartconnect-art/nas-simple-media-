@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Partage — NAS Simple Media</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="container" style="padding-top:2rem">
+    <div class="brand" style="margin-bottom:1.25rem">
+      <div class="brand-badge">▶</div>
+      <span>NAS Simple Media — Partage</span>
+    </div>
+    <div id="pwdBox" class="login-card hidden" style="margin:0 auto">
+      <h1>Lien protégé</h1>
+      <p>Ce partage est protégé par un mot de passe.</p>
+      <div class="field">
+        <label for="sharePwd">Mot de passe</label>
+        <input id="sharePwd" type="password" />
+      </div>
+      <p class="error hidden" id="pwdErr"></p>
+      <button class="btn btn-primary" id="pwdBtn" style="width:100%">Ouvrir</button>
+    </div>
+    <div id="playerBox" class="hidden">
+      <h2 id="title" class="section-title"></h2>
+      <p class="muted" id="meta"></p>
+      <div style="margin-top:1rem">
+        <video id="video" controls playsinline class="hidden"></video>
+        <audio id="audio" controls class="hidden"></audio>
+      </div>
+    </div>
+    <div id="errBox" class="empty hidden"></div>
+  </div>
+  <script>
+    const token = location.pathname.split('/').pop();
+    let password = '';
+
+    async function load() {
+      const url = '/api/public/share/' + encodeURIComponent(token) + (password ? ('?password=' + encodeURIComponent(password)) : '');
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        document.getElementById('pwdBox').classList.add('hidden');
+        document.getElementById('playerBox').classList.add('hidden');
+        const box = document.getElementById('errBox');
+        box.textContent = data.error || 'Accès refusé';
+        box.classList.remove('hidden');
+        return;
+      }
+      if (data.needsPassword) {
+        document.getElementById('pwdBox').classList.remove('hidden');
+        document.getElementById('playerBox').classList.add('hidden');
+        return;
+      }
+      document.getElementById('pwdBox').classList.add('hidden');
+      document.getElementById('playerBox').classList.remove('hidden');
+      document.getElementById('title').textContent = data.title;
+      const bits = [];
+      if (data.show_name) bits.push(data.show_name + (data.season != null ? ` S${String(data.season).padStart(2,'0')}E${String(data.episode).padStart(2,'0')}` : ''));
+      if (data.artist) bits.push(data.artist + (data.album ? ' — ' + data.album : ''));
+      bits.push(data.type);
+      document.getElementById('meta').textContent = bits.join(' · ');
+      const stream = '/api/public/stream/' + encodeURIComponent(token) + (password ? ('?password=' + encodeURIComponent(password)) : '');
+      const video = document.getElementById('video');
+      const audio = document.getElementById('audio');
+      if (data.type === 'track') {
+        audio.classList.remove('hidden');
+        video.classList.add('hidden');
+        audio.src = stream;
+        audio.play().catch(() => {});
+      } else {
+        video.classList.remove('hidden');
+        audio.classList.add('hidden');
+        video.src = stream;
+        video.play().catch(() => {});
+      }
+    }
+
+    document.getElementById('pwdBtn').addEventListener('click', () => {
+      password = document.getElementById('sharePwd').value;
+      document.getElementById('pwdErr').classList.add('hidden');
+      load().then(() => {
+        if (!document.getElementById('playerBox').classList.contains('hidden')) return;
+        if (!document.getElementById('errBox').classList.contains('hidden')) {
+          document.getElementById('pwdErr').textContent = document.getElementById('errBox').textContent;
+          document.getElementById('pwdErr').classList.remove('hidden');
+        }
+      });
+    });
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connexion — NAS Simple Media</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-card" id="loginForm">
+      <div class="brand" style="margin-bottom:1rem">
+        <div class="brand-badge">▶</div>
+        <span>NAS Simple Media</span>
+      </div>
+      <h1>Connexion</h1>
+      <p>Compte personnel — l’admin crée les utilisateurs et partage les bibliothèques.</p>
+      <div class="field">
+        <label for="username">Identifiant</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus value="admin" />
+      </div>
+      <div class="field">
+        <label for="password">Mot de passe</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+      </div>
+      <p class="error hidden" id="error"></p>
+      <button class="btn btn-primary" type="submit" style="width:100%">Se connecter</button>
+    </form>
+  </div>
+  <script>
+    (async () => {
+      try {
+        const me = await fetch('/api/me').then(r => r.json());
+        if (me.authenticated) location.href = '/';
+      } catch {}
+    })();
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('error');
+      err.classList.add('hidden');
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value
+        })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        err.textContent = data.error || 'Échec de connexion';
+        err.classList.remove('hidden');
+        return;
+      }
+      location.href = '/';
+    });
+  </script>
+</body>
+</html>

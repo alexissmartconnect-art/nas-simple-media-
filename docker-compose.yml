@@ -1,0 +1,19 @@
+services:
+  nas-simple-media:
+    build: .
+    image: nas-simple-media:1.0.0
+    container_name: nas-simple-media
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    environment:
+      MEDIA_PATH: /media
+      DATA_PATH: /data
+      PORT: "8096"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-changeme}"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8096}"
+      ENABLE_WATCH: "${ENABLE_WATCH:-1}"
+    volumes:
+      # Synology: replace host paths with your shared folders
+      - /volume1/media:/media:ro
+      - /volume1/docker/nas-simple-media/data:/data
