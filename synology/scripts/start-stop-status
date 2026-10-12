@@ -1,0 +1,109 @@
+#!/bin/sh
+# start-stop-status for nas-simple-media (DSM 7).
+#
+# Invoked by Package Center with one of: start | stop | status | save | restore.
+# The node process itself runs as the package user sc-nas-simple-media and
+# writes its own PID file before exec'ing, so the recorded PID is exact.
+
+. "$(dirname "$0")/common.sh"
+
+start() {
+  if is_running; then
+    log "already running (pid $(cat "${PIDFILE}"))"
+    return 0
+  fi
+
+  [ -x "${APPDIR}/dist/index.js" ] || die "application not installed at ${APPDIR}"
+
+  NODE_BIN="$(find_node)" || die "no Node.js runtime found. Install the Synology 'Node.js v22' package."
+  if ! node_is_supported "${NODE_BIN}"; then
+    die "Node.js $(node_version "${NODE_BIN}") is too old; the bundled SQLite driver needs >= ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}. Install the Synology 'Node.js v22' package."
+  fi
+
+  [ -f "${ENVFILE}" ] || write_env_file
+  ensure_dirs
+  chown_to_service
+
+  # Start detached, as the service user, stdin closed, output appended.
+  nohup su -s /bin/sh "${SERVICE_USER}" -c "exec ${APPDIR}/bin/run.sh" \
+    >>"${LOGFILE}" 2>&1 </dev/null &
+
+  # Wait for run.sh to publish its PID.
+  _i=0
+  while [ ! -s "${PIDFILE}" ] && [ "${_i}" -lt 50 ]; do
+    sleep 0.2
+    _i=$((_i + 1))
+  done
+
+  if is_running; then
+    log "started (pid $(cat "${PIDFILE}")) on port ${APP_PORT}"
+    return 0
+  fi
+
+  warn "service did not report a PID; check ${LOGFILE}"
+  return 1
+}
+
+stop() {
+  if ! is_running; then
+    rm -f "${PIDFILE}"
+    log "not running"
+    return 0
+  fi
+
+  _pid="$(cat "${PIDFILE}")"
+  log "stopping pid ${_pid}"
+  kill -TERM "${_pid}" 2>/dev/null
+
+  _i=0
+  while kill -0 "${_pid}" 2>/dev/null && [ "${_i}" -lt 30 ]; do
+    sleep 1
+    _i=$((_i + 1))
+  done
+
+  if kill -0 "${_pid}" 2>/dev/null; then
+    warn "process did not exit, sending SIGKILL"
+    kill -KILL "${_pid}" 2>/dev/null
+    sleep 1
+  fi
+
+  rm -f "${PIDFILE}"
+  log "stopped"
+  return 0
+}
+
+status() {
+  if is_running; then
+    log "running (pid $(cat "${PIDFILE}"))"
+    exit 0
+  fi
+  log "stopped"
+  exit 3
+}
+
+case "$1" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart)
+    stop
+    start
+    ;;
+  status)
+    status
+    ;;
+  save)
+    # DSM backup hook: nothing transient to preserve beyond the env file.
+    exit 0
+    ;;
+  restore)
+    exit 0
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status|save|restore}" >&2
+    exit 1
+    ;;
+esac

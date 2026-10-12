@@ -1,0 +1,36 @@
+#!/bin/sh
+# preuninst — runs as root before the package files are removed.
+
+. "$(dirname "$0")/common.sh"
+
+log "pre-uninstall for ${PKGNAME}"
+
+# Stop the service so nothing holds the database open.
+if is_running; then
+  log "stopping running service"
+  "$0" stop 2>/dev/null || {
+    _pid="$(cat "${PIDFILE}" 2>/dev/null)"
+    [ -n "${_pid}" ] && kill -TERM "${_pid}" 2>/dev/null
+    sleep 2
+    [ -n "${_pid}" ] && kill -KILL "${_pid}" 2>/dev/null
+    rm -f "${PIDFILE}"
+  }
+fi
+
+# Warn about the database: it lives under the package dir and DSM removes it.
+if [ -f "${VAR_DIR}/library.db" ]; then
+  cat <<EOF
+
+-------------------------------------------------------------------------------
+ nas-simple-media — the SQLite database will be removed with the package:
+   ${VAR_DIR}/library.db
+
+ Back it up first if you want to keep users, libraries and share links:
+   cp ${VAR_DIR}/library.db /volume1/backups/
+-------------------------------------------------------------------------------
+
+EOF
+fi
+
+log "pre-uninstall done"
+exit 0
