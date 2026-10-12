@@ -1,7 +1,7 @@
 {
   "name": "nas-simple-media",
   "version": "1.1.0",
-  "description": "Simple free Plex-like media server for Synology NAS \u2014 movies, music, TV series, ffmpeg Compatible playback, VLC/download",
+  "description": "Simple free Plex-like media server for Synology NAS — movies, music, TV series, ffmpeg Compatible playback, VLC/download",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -24,7 +24,8 @@
     "better-sqlite3": "^11.7.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2",
-    "mime-types": "^2.1.35"
+    "mime-types": "^2.1.35",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
@@ -32,6 +33,7 @@
     "@types/express": "^4.17.21",
     "@types/mime-types": "^2.1.4",
     "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

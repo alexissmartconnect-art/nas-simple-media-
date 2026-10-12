@@ -15,6 +15,9 @@
     editUserId: null,
     editLibId: null,
     allLibsAdmin: [],
+    browseMode: 'media',
+    folderPath: '',
+    publicBaseUrl: '',
   };
 
   const $ = (id) => document.getElementById(id);
@@ -79,6 +82,7 @@
   async function refreshStats() {
     try {
       const st = await api('/api/status');
+      if (st.publicBaseUrl) state.publicBaseUrl = st.publicBaseUrl;
       $('stats').innerHTML = (st.counts || [])
         .map(
           (c) =>
@@ -180,6 +184,11 @@
           <div>
             <div class="title">${escapeHtml(l.name)}</div>
             <div class="meta">${escapeHtml(l.type)} · ${l.item_count} média(s)</div>
+            ${
+              canShare()
+                ? `<div class="card-actions"><button class="btn btn-sm btn-lib-share" type="button">🔗 Partager</button></div>`
+                : ''
+            }
           </div>
         </article>`
         )
@@ -189,13 +198,27 @@
           const id = Number(el.getAttribute('data-lib'));
           state.library = state.libraries.find((l) => l.id === id);
           state.drill = null;
+          state.folderPath = '';
           render();
+        });
+      });
+      content.querySelectorAll('.btn-lib-share').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const card = btn.closest('[data-lib]');
+          const id = Number(card.getAttribute('data-lib'));
+          const lib = state.libraries.find((l) => l.id === id);
+          if (lib) openShareModal({ targetType: 'library', libraryId: lib.id, label: lib.name });
         });
       });
       return;
     }
 
     const lib = state.library;
+    if (state.browseMode === 'folders') {
+      await renderFolderBrowse(lib);
+      return;
+    }
     if (lib.type === 'movies') {
       sectionTitle.textContent = lib.name;
       const data = await api(
@@ -204,8 +227,10 @@
       state.visibleItems = data.items || [];
       content.innerHTML =
         crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
+        viewToggleHtml() +
         cardsHtml(state.visibleItems);
       bindCards();
+      bindViewToggle();
       return;
     }
 
@@ -221,6 +246,7 @@
         state.visibleItems = [];
         content.innerHTML =
           crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
+          viewToggleHtml() +
           (shows.length
             ? `<div class="grid">${shows
                 .map(
@@ -229,15 +255,33 @@
                 <div>
                   <div class="title">${escapeHtml(s.name)}</div>
                   <div class="meta">${s.seasons} saison(s) · ${s.episodes} ép.</div>
+                  ${
+                    canShare()
+                      ? `<div class="card-actions"><button class="btn btn-sm btn-show-share" type="button">🔗 Partager</button></div>`
+                      : ''
+                  }
                 </div>
               </article>`
                 )
                 .join('')}</div>`
             : emptyMsg('Aucun épisode. Ajoutez des fichiers puis Rescan (admin).'));
+        bindViewToggle();
         content.querySelectorAll('[data-show]').forEach((el) => {
           el.addEventListener('click', () => {
             state.drill = el.getAttribute('data-show');
             render();
+          });
+        });
+        content.querySelectorAll('.btn-show-share').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const name = btn.closest('[data-show]').getAttribute('data-show');
+            openShareModal({
+              targetType: 'series',
+              libraryId: lib.id,
+              showName: name,
+              label: name,
+            });
           });
         });
         return;
@@ -253,8 +297,12 @@
           ['Bibliothèques', () => { state.library = null; state.drill = null; render(); }],
           [lib.name, () => { state.drill = null; render(); }],
           [state.drill],
-        ]) + groupedSeriesHtml(state.visibleItems);
+        ]) +
+        viewToggleHtml() +
+        groupedSeriesHtml(state.visibleItems);
       bindListActions();
+      bindViewToggle();
+      bindCollectionShare();
       return;
     }
 
@@ -270,6 +318,7 @@
       state.visibleItems = [];
       content.innerHTML =
         crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
+        viewToggleHtml() +
         (artists.length
           ? `<div class="grid">${artists
               .map(
@@ -278,15 +327,33 @@
               <div>
                 <div class="title">${escapeHtml(a.name)}</div>
                 <div class="meta">${a.albums} album(s) · ${a.tracks} pistes</div>
+                ${
+                  canShare()
+                    ? `<div class="card-actions"><button class="btn btn-sm btn-artist-share" type="button">🔗 Partager</button></div>`
+                    : ''
+                }
               </div>
             </article>`
               )
               .join('')}</div>`
           : emptyMsg('Aucune musique. Ajoutez des fichiers puis Rescan (admin).'));
+      bindViewToggle();
       content.querySelectorAll('[data-artist]').forEach((el) => {
         el.addEventListener('click', () => {
           state.drill = el.getAttribute('data-artist');
           render();
+        });
+      });
+      content.querySelectorAll('.btn-artist-share').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const name = btn.closest('[data-artist]').getAttribute('data-artist');
+          openShareModal({
+            targetType: 'artist',
+            libraryId: lib.id,
+            artist: name,
+            label: name,
+          });
         });
       });
       return;
@@ -302,8 +369,184 @@
         ['Bibliothèques', () => { state.library = null; state.drill = null; render(); }],
         [lib.name, () => { state.drill = null; render(); }],
         [state.drill],
-      ]) + groupedMusicHtml(state.visibleItems);
+      ]) +
+      viewToggleHtml() +
+      groupedMusicHtml(state.visibleItems);
     bindListActions();
+    bindViewToggle();
+    bindCollectionShare();
+  }
+
+  function viewToggleHtml() {
+    return `<div class="view-toggle mode-toggle">
+      <button type="button" class="btn mode-btn ${state.browseMode !== 'folders' ? 'active' : ''}" data-browse="media">Vue Média</button>
+      <button type="button" class="btn mode-btn ${state.browseMode === 'folders' ? 'active' : ''}" data-browse="folders">📁 Par Dossiers</button>
+    </div>`;
+  }
+
+  function bindViewToggle() {
+    content.querySelectorAll('[data-browse]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.browseMode = btn.getAttribute('data-browse') === 'folders' ? 'folders' : 'media';
+        if (state.browseMode === 'media') state.folderPath = '';
+        render();
+      });
+    });
+  }
+
+  async function renderFolderBrowse(lib) {
+    sectionTitle.textContent = lib.name;
+    const data = await api(
+      `/api/folders?library_id=${lib.id}&path=${encodeURIComponent(state.folderPath || '')}`
+    );
+    const crumbs = [
+      [
+        'Bibliothèques',
+        () => {
+          state.library = null;
+          state.folderPath = '';
+          render();
+        },
+      ],
+      [
+        lib.name,
+        () => {
+          state.folderPath = '';
+          render();
+        },
+      ],
+    ];
+    const segs = (state.folderPath || '').split('/').filter(Boolean);
+    let acc = '';
+    segs.forEach((seg, i) => {
+      acc = acc ? acc + '/' + seg : seg;
+      const pathAt = acc;
+      if (i === segs.length - 1) crumbs.push([seg]);
+      else
+        crumbs.push([
+          seg,
+          () => {
+            state.folderPath = pathAt;
+            render();
+          },
+        ]);
+    });
+    const shareFolderBtn =
+      canShare() && state.folderPath
+        ? `<button class="btn" id="btnShareFolder" type="button">🔗 Partager ce dossier</button>`
+        : canShare()
+          ? `<button class="btn" id="btnShareFolder" type="button">🔗 Partager la bibliothèque</button>`
+          : '';
+    const folderCards = (data.subfolders || [])
+      .map(
+        (f) => `<article class="card" data-folder="${escapeAttr(f.path)}">
+        <div class="thumb">📁</div>
+        <div>
+          <div class="title">${escapeHtml(f.name)}</div>
+          <div class="meta">${f.item_count} média(s)</div>
+          ${
+            canShare()
+              ? `<div class="card-actions"><button class="btn btn-sm btn-folder-share" type="button">🔗 Partager</button></div>`
+              : ''
+          }
+        </div>
+      </article>`
+      )
+      .join('');
+    state.visibleItems = data.items || [];
+    content.innerHTML =
+      crumb(crumbs) +
+      viewToggleHtml() +
+      `<div class="toolbar">${shareFolderBtn}<span class="muted folder-count">${data.total_in_tree || 0} dans l’arbre</span></div>` +
+      (folderCards ? `<div class="grid">${folderCards}</div>` : '') +
+      (state.visibleItems.length ? cardsHtml(state.visibleItems) : !folderCards ? emptyMsg('Dossier vide.') : '');
+    bindViewToggle();
+    bindCards();
+    content.querySelectorAll('[data-folder]').forEach((el) => {
+      el.addEventListener('click', () => {
+        state.folderPath = el.getAttribute('data-folder');
+        render();
+      });
+    });
+    content.querySelectorAll('.btn-folder-share').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const path = btn.closest('[data-folder]').getAttribute('data-folder');
+        const name = path.split('/').pop();
+        openShareModal({
+          targetType: 'folder',
+          libraryId: lib.id,
+          folderPath: path,
+          label: name,
+        });
+      });
+    });
+    const btnShareFolder = $('btnShareFolder');
+    if (btnShareFolder) {
+      btnShareFolder.addEventListener('click', () => {
+        if (state.folderPath) {
+          openShareModal({
+            targetType: 'folder',
+            libraryId: lib.id,
+            folderPath: state.folderPath,
+            label: state.folderPath.split('/').pop(),
+          });
+        } else {
+          openShareModal({ targetType: 'library', libraryId: lib.id, label: lib.name });
+        }
+      });
+    }
+  }
+
+  function bindCollectionShare() {
+    content.querySelectorAll('[data-share-season]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const season = Number(btn.getAttribute('data-share-season'));
+        openShareModal({
+          targetType: 'series',
+          libraryId: state.library.id,
+          showName: state.drill,
+          season,
+          label: `${state.drill} · S${String(season).padStart(2, '0')}`,
+        });
+      });
+    });
+    content.querySelectorAll('[data-share-album]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const album = btn.getAttribute('data-share-album');
+        openShareModal({
+          targetType: 'artist',
+          libraryId: state.library.id,
+          artist: state.drill,
+          album,
+          label: `${state.drill} — ${album}`,
+        });
+      });
+    });
+    const shareShow = $('btnShareShow');
+    if (shareShow) {
+      shareShow.addEventListener('click', () => {
+        openShareModal({
+          targetType: 'series',
+          libraryId: state.library.id,
+          showName: state.drill,
+          label: state.drill,
+        });
+      });
+    }
+    const shareArtist = $('btnShareArtist');
+    if (shareArtist) {
+      shareArtist.addEventListener('click', () => {
+        openShareModal({
+          targetType: 'artist',
+          libraryId: state.library.id,
+          artist: state.drill,
+          label: state.drill,
+        });
+      });
+    }
   }
 
   function crumb(parts) {
@@ -377,11 +620,20 @@
     }
     const playAllBtn =
       items.length > 1
-        ? `<div class="toolbar"><button class="btn btn-primary" id="btnPlayAll" type="button">▶ Tout lire (${items.length} épisodes)</button></div>`
-        : '';
+        ? `<div class="toolbar"><button class="btn btn-primary" id="btnPlayAll" type="button">▶ Tout lire (${items.length} épisodes)</button>${
+            canShare()
+              ? `<button class="btn" id="btnShareShow" type="button">🔗 Partager</button>`
+              : ''
+          }</div>`
+        : canShare()
+          ? `<div class="toolbar"><button class="btn" id="btnShareShow" type="button">🔗 Partager</button></div>`
+          : '';
     let html = playAllBtn;
     for (const [season, eps] of groups.entries()) {
-      html += `<div class="group-header"><span>Saison ${season}</span><span class="muted">${eps.length} ép.</span></div>`;
+      const shareSeason = canShare()
+        ? `<button class="btn btn-sm" type="button" data-share-season="${season}">🔗 Partager</button>`
+        : '';
+      html += `<div class="group-header"><span>Saison ${season}</span><span class="muted">${eps.length} ép. ${shareSeason}</span></div>`;
       html += listHtml(eps);
     }
     return html;
@@ -397,11 +649,20 @@
     }
     const playAllBtn =
       items.length > 1
-        ? `<div class="toolbar"><button class="btn btn-primary" id="btnPlayAll" type="button">▶ Tout lire (${items.length} pistes)</button></div>`
-        : '';
+        ? `<div class="toolbar"><button class="btn btn-primary" id="btnPlayAll" type="button">▶ Tout lire (${items.length} pistes)</button>${
+            canShare()
+              ? `<button class="btn" id="btnShareArtist" type="button">🔗 Partager</button>`
+              : ''
+          }</div>`
+        : canShare()
+          ? `<div class="toolbar"><button class="btn" id="btnShareArtist" type="button">🔗 Partager</button></div>`
+          : '';
     let html = playAllBtn;
     for (const [album, tracks] of groups.entries()) {
-      html += `<div class="group-header"><span>💿 ${escapeHtml(album)}</span><span class="muted">${tracks.length} piste(s)</span></div>`;
+      const shareAlbum = canShare()
+        ? `<button class="btn btn-sm" type="button" data-share-album="${escapeAttr(album)}">🔗 Partager</button>`
+        : '';
+      html += `<div class="group-header"><span>💿 ${escapeHtml(album)}</span><span class="muted">${tracks.length} piste(s) ${shareAlbum}</span></div>`;
       html += listHtml(tracks);
     }
     return html;
@@ -666,11 +927,26 @@
     window.location.href = '/api/media/' + id + '/download';
   }
 
+  function setQrImage(imgEl, url) {
+    if (!imgEl || !url) return;
+    imgEl.src = '/api/qr?text=' + encodeURIComponent(url);
+  }
+
+  function openQrModal(url, title, sub) {
+    $('qrModalTitle').textContent = title || 'QR Code';
+    $('qrModalSub').textContent = sub || '';
+    $('qrModalUrl').value = url;
+    setQrImage($('qrModalImg'), url);
+    $('qrModalCopied').classList.add('hidden');
+    $('qrModal').classList.remove('hidden');
+  }
+
   async function openVlcModal(id) {
     try {
       const data = await api('/api/media/' + id + '/vlc');
       $('vlcUrl').value = data.streamUrl;
       $('vlcM3uLink').href = data.m3uUrl;
+      setQrImage($('vlcQrImg'), data.streamUrl);
       $('vlcCopied').classList.add('hidden');
       $('vlcModal').classList.remove('hidden');
       try {
@@ -682,52 +958,126 @@
     }
   }
 
-  let shareMediaId = null;
-  function openShareModal(id) {
+  let shareTarget = null;
+  function openShareModal(target) {
     if (!canShare()) return;
-    shareMediaId = id;
+    if (typeof target === 'number') {
+      shareTarget = { targetType: 'media', mediaId: target };
+    } else {
+      shareTarget = target;
+    }
     $('shareError').classList.add('hidden');
     $('shareResult').classList.add('hidden');
+    $('shareQrBox').classList.add('hidden');
     $('shareExpires').value = '';
     $('shareMaxUses').value = '';
     $('sharePassword').value = '';
-    api('/api/media/' + id).then((item) => {
-      $('shareMediaTitle').textContent = item.title;
+    $('shareCreate').classList.remove('hidden');
+    const kind = shareTarget.targetType || 'media';
+    $('shareModalTitle').textContent =
+      kind === 'media' ? 'Lien de partage (1 média)' : 'Lien de partage (collection)';
+    if (kind === 'media' && shareTarget.mediaId) {
+      api('/api/media/' + shareTarget.mediaId).then((item) => {
+        $('shareMediaTitle').textContent = item.title;
+        $('shareModal').classList.remove('hidden');
+      });
+    } else {
+      $('shareMediaTitle').textContent = shareTarget.label || kind;
       $('shareModal').classList.remove('hidden');
-    });
+    }
   }
 
   async function renderShares() {
     const data = await api('/api/shares');
     const shares = data.shares || [];
+    if (data.publicBaseUrl) state.publicBaseUrl = data.publicBaseUrl;
+    const banner = isAdmin()
+      ? `<div class="public-url-banner">
+          <h3>🌐 URL Internet / Accès distant</h3>
+          <p class="muted">Tailscale, Cloudflare Tunnel, DDNS ou IP LAN — utilisée pour les liens de partage et les QR codes.</p>
+          <div class="public-url-row">
+            <input id="publicUrlInput" type="url" placeholder="https://media.tailnet.ts.net" value="${escapeAttr(
+              state.publicBaseUrl || ''
+            )}" />
+            <button class="btn btn-primary" id="btnSavePublicUrl" type="button">Enregistrer</button>
+            <button class="btn btn-ghost" id="btnClearPublicUrl" type="button">Réinit.</button>
+          </div>
+          <p class="ok hidden" id="publicUrlOk"></p>
+          <p class="error hidden" id="publicUrlErr"></p>
+        </div>`
+      : '';
     if (!shares.length) {
-      content.innerHTML = emptyMsg('Aucun partage. Ouvrez un média et cliquez sur Partager.');
-      return;
-    }
-    content.innerHTML = `<div class="list">${shares
-      .map((s) => {
-        const exp = s.expires_at ? new Date(s.expires_at).toLocaleString() : 'jamais';
-        const uses = s.max_uses != null ? `${s.use_count}/${s.max_uses}` : `${s.use_count}`;
-        return `<div class="list-item">
+      content.innerHTML = banner + emptyMsg('Aucun partage. Ouvrez un média ou un dossier et cliquez sur Partager.');
+    } else {
+      content.innerHTML =
+        banner +
+        `<div class="list">${shares
+          .map((s) => {
+            const exp = s.expires_at ? new Date(s.expires_at).toLocaleString() : 'jamais';
+            const uses = s.max_uses != null ? `${s.use_count}/${s.max_uses}` : `${s.use_count}`;
+            const url = s.url || location.origin + '/s/' + s.token;
+            const kind = s.target_type && s.target_type !== 'media' ? ` · ${s.target_type}` : '';
+            return `<div class="list-item">
           <div class="left">
             <div class="title">${escapeHtml(s.title)}</div>
             <div class="meta">par ${escapeHtml(s.created_by_name || '?')} · exp: ${escapeHtml(exp)} · uses: ${uses}${
-          s.password_hash ? ' · 🔒' : ''
-        }</div>
+              s.password_hash ? ' · 🔒' : ''
+            }${kind}</div>
           </div>
           <div class="actions">
-            <button class="btn" data-copy="${escapeAttr('/s/' + s.token)}" type="button">Copier</button>
+            <button class="btn" data-copy="${escapeAttr(url)}" type="button">Copier</button>
+            <button class="btn" data-qr="${escapeAttr(url)}" data-qr-title="${escapeAttr(s.title)}" type="button">📱 QR</button>
             <button class="btn btn-danger" data-revoke="${s.id}" type="button">Révoquer</button>
           </div>
         </div>`;
-      })
-      .join('')}</div>`;
+          })
+          .join('')}</div>`;
+    }
+    const saveBtn = $('btnSavePublicUrl');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        $('publicUrlOk').classList.add('hidden');
+        $('publicUrlErr').classList.add('hidden');
+        try {
+          const r = await api('/api/admin/settings/public-url', {
+            method: 'PUT',
+            body: JSON.stringify({ publicBaseUrl: $('publicUrlInput').value.trim() || null }),
+          });
+          state.publicBaseUrl = r.publicBaseUrl;
+          $('publicUrlOk').textContent = 'URL enregistrée : ' + r.publicBaseUrl;
+          $('publicUrlOk').classList.remove('hidden');
+          renderShares();
+        } catch (e) {
+          $('publicUrlErr').textContent = e.message;
+          $('publicUrlErr').classList.remove('hidden');
+        }
+      });
+    }
+    const clearBtn = $('btnClearPublicUrl');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', async () => {
+        try {
+          await api('/api/admin/settings/public-url', {
+            method: 'PUT',
+            body: JSON.stringify({ publicBaseUrl: null }),
+          });
+          renderShares();
+        } catch (e) {
+          alert(e.message);
+        }
+      });
+    }
     content.querySelectorAll('[data-copy]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const url = location.origin + btn.getAttribute('data-copy');
+        const url = btn.getAttribute('data-copy');
         await navigator.clipboard.writeText(url);
         btn.textContent = 'OK';
         setTimeout(() => (btn.textContent = 'Copier'), 1200);
+      });
+    });
+    content.querySelectorAll('[data-qr]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        openQrModal(btn.getAttribute('data-qr'), btn.getAttribute('data-qr-title') || 'QR Code', 'Scannez pour ouvrir le partage');
       });
     });
     content.querySelectorAll('[data-revoke]').forEach((btn) => {
@@ -768,6 +1118,7 @@
               <td class="muted">${u.role === 'admin' ? 'toutes' : escapeHtml(libNames || '—')}</td>
               <td style="display:flex;gap:0.35rem;flex-wrap:wrap">
                 <button class="btn" data-edit-user="${u.id}" type="button">Modifier</button>
+                <button class="btn" data-qr-user="${escapeAttr(u.username)}" type="button">📱 QR Accès</button>
                 ${
                   canDelete
                     ? `<button class="btn btn-danger" data-del-user="${u.id}" type="button">Suppr.</button>`
@@ -796,6 +1147,14 @@
         } catch (e) {
           alert(e.message);
         }
+      });
+    });
+    content.querySelectorAll('[data-qr-user]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const username = btn.getAttribute('data-qr-user');
+        const base = (state.publicBaseUrl || location.origin).replace(/\/+$/, '');
+        const url = `${base}/login.html?user=${encodeURIComponent(username)}`;
+        openQrModal(url, 'QR Accès — ' + username, 'Scannez pour ouvrir la page de connexion');
       });
     });
   }
@@ -994,6 +1353,13 @@
     if (state.currentItem) openVlcModal(state.currentItem.id);
   });
   $('vlcClose').addEventListener('click', () => $('vlcModal').classList.add('hidden'));
+  $('qrModalClose').addEventListener('click', () => $('qrModal').classList.add('hidden'));
+  $('qrModalCopy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('qrModalUrl').value);
+      $('qrModalCopied').classList.remove('hidden');
+    } catch {}
+  });
   $('vlcCopy').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText($('vlcUrl').value);
@@ -1026,7 +1392,15 @@
       const share = await api('/api/shares', {
         method: 'POST',
         body: JSON.stringify({
-          mediaId: shareMediaId,
+          targetType: (shareTarget && shareTarget.targetType) || 'media',
+          mediaId: shareTarget && shareTarget.mediaId,
+          libraryId: shareTarget && shareTarget.libraryId,
+          folderPath: shareTarget && shareTarget.folderPath,
+          showName: shareTarget && shareTarget.showName,
+          season: shareTarget && shareTarget.season,
+          artist: shareTarget && shareTarget.artist,
+          album: shareTarget && shareTarget.album,
+          label: shareTarget && shareTarget.label,
           expiresAt,
           maxUses: $('shareMaxUses').value ? Number($('shareMaxUses').value) : null,
           password: $('sharePassword').value || null,
@@ -1035,6 +1409,9 @@
       const el = $('shareResult');
       el.textContent = 'Lien copié : ' + share.url;
       el.classList.remove('hidden');
+      $('shareUrlOut').value = share.url;
+      setQrImage($('shareQrImg'), share.url);
+      $('shareQrBox').classList.remove('hidden');
       try {
         await navigator.clipboard.writeText(share.url);
       } catch {}

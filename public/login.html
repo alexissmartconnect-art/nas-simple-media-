@@ -29,6 +29,9 @@
   </div>
   <script>
     (async () => {
+      const params = new URLSearchParams(location.search);
+      const preset = params.get('user') || params.get('username');
+      if (preset) document.getElementById('username').value = preset;
       try {
         const me = await fetch('/api/me').then(r => r.json());
         if (me.authenticated) location.href = '/';

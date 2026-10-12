@@ -1,11 +1,21 @@
-import { getDb, type MediaItem, type ShareRow, type SessionUser } from '../db/schema';
+import { getDb, type MediaItem, type ShareRow, type SessionUser, type ShareTargetType } from '../db/schema';
 import { generateToken } from '../scanner/heuristics';
 import { hashSharePassword, verifySharePassword } from '../auth/passwords';
-import { config } from '../config';
 import { getLibrary, userCanAccessLibrary } from '../libraries/libraries';
+import { resolvePublicBaseUrl } from './qr';
+
+export type { ShareTargetType };
 
 export interface CreateShareInput {
-  mediaId: number;
+  targetType?: ShareTargetType;
+  mediaId?: number;
+  libraryId?: number;
+  folderPath?: string;
+  showName?: string;
+  season?: number | null;
+  artist?: string;
+  album?: string | null;
+  label?: string | null;
   expiresAt?: string | null;
   maxUses?: number | null;
   password?: string | null;
@@ -38,68 +48,178 @@ export function hasShareLease(token: string, clientKey?: string): boolean {
   return true;
 }
 
-export function createShare(input: CreateShareInput): ShareRow & { url: string } {
+export function normalizeFolderPath(raw: string, allowEmpty = false): string {
+  let p = String(raw || '')
+    .replace(/\\/g, '/')
+    .trim();
+  p = p.replace(/^\/+|\/+$/g, '');
+  if (p.split('/').some((seg) => seg === '..' || seg === '.')) {
+    throw new Error('Chemin de dossier invalide');
+  }
+  if (!allowEmpty && !p) {
+    throw new Error('Chemin de dossier requis');
+  }
+  return p;
+}
+
+function parseExpiresAt(raw?: string | null): string | null {
+  if (!raw || !String(raw).trim()) return null;
+  const parsed = Date.parse(String(raw).trim());
+  if (Number.isNaN(parsed)) {
+    throw new Error("Date d'expiration invalide");
+  }
+  return new Date(parsed).toISOString();
+}
+
+function parseMaxUses(raw?: number | null): number | null {
+  if (raw == null || String(raw) === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error("Le nombre d'utilisations max doit être un entier >= 1");
+  }
+  return n;
+}
+
+function countMedia(sql: string, params: unknown[]): number {
+  return (getDb().prepare(`SELECT COUNT(*) as c FROM media_items WHERE ${sql}`).get(...params) as { c: number }).c;
+}
+
+export function createShare(input: CreateShareInput, baseUrl?: string): ShareRow & { url: string } {
   const db = getDb();
-  const media = db.prepare('SELECT id FROM media_items WHERE id = ?').get(input.mediaId);
-  if (!media) throw new Error('Média introuvable');
+  const targetType: ShareTargetType = input.targetType || 'media';
+  let mediaId: number | null = null;
+  let libraryId: number | null = input.libraryId ?? null;
+  let folderPath: string | null = null;
+  let showName: string | null = null;
+  let season: number | null = null;
+  let artist: string | null = null;
+  let album: string | null = null;
+  let label: string | null = input.label?.trim() || null;
 
-  let expiresAt: string | null = null;
-  if (input.expiresAt && String(input.expiresAt).trim()) {
-    const parsed = Date.parse(String(input.expiresAt).trim());
-    if (Number.isNaN(parsed)) {
-      throw new Error("Date d'expiration invalide");
+  if (targetType === 'media') {
+    const id = Number(input.mediaId);
+    if (!id) throw new Error('mediaId requis');
+    const media = db.prepare('SELECT * FROM media_items WHERE id = ?').get(id) as MediaItem | undefined;
+    if (!media) throw new Error('Média introuvable');
+    mediaId = media.id;
+    libraryId = media.library_id;
+    if (!label) label = media.title;
+  } else if (targetType === 'library') {
+    const id = Number(input.libraryId);
+    if (!id) throw new Error('libraryId requis');
+    const lib = getLibrary(id);
+    if (!lib) throw new Error('Bibliothèque introuvable');
+    libraryId = lib.id;
+    if (!label) label = lib.name;
+  } else if (targetType === 'folder') {
+    const id = Number(input.libraryId);
+    if (!id) throw new Error('libraryId requis');
+    const lib = getLibrary(id);
+    if (!lib) throw new Error('Bibliothèque introuvable');
+    folderPath = normalizeFolderPath(String(input.folderPath || ''));
+    const n = countMedia('library_id = ? AND (rel_path = ? OR rel_path LIKE ?)', [
+      id,
+      folderPath,
+      folderPath + '/%',
+    ]);
+    if (!n) throw new Error('Aucun média dans ce dossier');
+    libraryId = id;
+    if (!label) label = folderPath.split('/').pop() || folderPath;
+  } else if (targetType === 'series') {
+    const id = Number(input.libraryId);
+    const name = String(input.showName || '').trim();
+    if (!id || !name) throw new Error('libraryId et showName requis');
+    const lib = getLibrary(id);
+    if (!lib) throw new Error('Bibliothèque introuvable');
+    showName = name;
+    if (input.season != null && input.season !== ('' as unknown)) {
+      const s = Number(input.season);
+      if (!Number.isInteger(s) || s < 0) throw new Error('Saison invalide');
+      season = s;
     }
-    expiresAt = new Date(parsed).toISOString();
+    const n =
+      season != null
+        ? countMedia('library_id = ? AND show_name = ? AND season = ?', [id, showName, season])
+        : countMedia('library_id = ? AND show_name = ?', [id, showName]);
+    if (!n) throw new Error('Aucun épisode pour cette série');
+    libraryId = id;
+    if (!label) {
+      label = season != null ? `${showName} · S${String(season).padStart(2, '0')}` : showName;
+    }
+  } else if (targetType === 'artist') {
+    const id = Number(input.libraryId);
+    const name = String(input.artist || '').trim();
+    if (!id || !name) throw new Error('libraryId et artist requis');
+    const lib = getLibrary(id);
+    if (!lib) throw new Error('Bibliothèque introuvable');
+    artist = name;
+    if (input.album != null && String(input.album).trim() !== '') {
+      album = String(input.album).trim();
+    }
+    const n = album
+      ? countMedia('library_id = ? AND artist = ? AND album = ?', [id, artist, album])
+      : countMedia('library_id = ? AND artist = ?', [id, artist]);
+    if (!n) throw new Error('Aucune piste pour cet artiste');
+    libraryId = id;
+    if (!label) label = album ? `${artist} — ${album}` : artist;
+  } else {
+    throw new Error('Type de partage invalide');
   }
 
-  let maxUses: number | null = null;
-  if (input.maxUses != null && String(input.maxUses) !== '') {
-    const n = Number(input.maxUses);
-    if (!Number.isInteger(n) || n < 1) {
-      throw new Error("Le nombre d'utilisations max doit être un entier >= 1");
-    }
-    maxUses = n;
-  }
-
+  const expiresAt = parseExpiresAt(input.expiresAt);
+  const maxUses = parseMaxUses(input.maxUses);
   const token = generateToken(24);
   const password_hash = input.password ? hashSharePassword(input.password) : null;
 
   const info = db
     .prepare(
-      `INSERT INTO shares (token, media_id, created_by, password_hash, expires_at, max_uses)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO shares (
+         token, target_type, media_id, library_id, folder_path, show_name, season,
+         artist, album, label, created_by, password_hash, expires_at, max_uses
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(token, input.mediaId, input.createdBy ?? null, password_hash, expiresAt, maxUses);
+    .run(
+      token,
+      targetType,
+      mediaId,
+      libraryId,
+      folderPath,
+      showName,
+      season,
+      artist,
+      album,
+      label,
+      input.createdBy ?? null,
+      password_hash,
+      expiresAt,
+      maxUses
+    );
 
   const row = db.prepare('SELECT * FROM shares WHERE id = ?').get(info.lastInsertRowid) as ShareRow;
-  return { ...row, url: `${config.PUBLIC_BASE_URL}/s/${token}` };
+  const base = (baseUrl || resolvePublicBaseUrl()).replace(/\/+$/, '');
+  return { ...row, url: `${base}/s/${token}` };
 }
 
 export function listShares(
   user: SessionUser
 ): Array<ShareRow & { title: string; media_type: string; created_by_name: string | null }> {
   const db = getDb();
+  const sql = `SELECT s.*,
+         COALESCE(s.label, m.title, l.name, s.token) as title,
+         COALESCE(m.type, s.target_type) as media_type,
+         u.username as created_by_name
+       FROM shares s
+       LEFT JOIN media_items m ON m.id = s.media_id
+       LEFT JOIN libraries l ON l.id = s.library_id
+       LEFT JOIN users u ON u.id = s.created_by
+       WHERE s.revoked = 0`;
   if (user.role === 'admin') {
     return db
-      .prepare(
-        `SELECT s.*, m.title, m.type as media_type, u.username as created_by_name
-         FROM shares s
-         JOIN media_items m ON m.id = s.media_id
-         LEFT JOIN users u ON u.id = s.created_by
-         WHERE s.revoked = 0
-         ORDER BY s.created_at DESC`
-      )
+      .prepare(`${sql} ORDER BY s.created_at DESC`)
       .all() as Array<ShareRow & { title: string; media_type: string; created_by_name: string | null }>;
   }
   return db
-    .prepare(
-      `SELECT s.*, m.title, m.type as media_type, u.username as created_by_name
-       FROM shares s
-       JOIN media_items m ON m.id = s.media_id
-       LEFT JOIN users u ON u.id = s.created_by
-       WHERE s.revoked = 0 AND s.created_by = ?
-       ORDER BY s.created_at DESC`
-    )
+    .prepare(`${sql} AND s.created_by = ? ORDER BY s.created_at DESC`)
     .all(user.id) as Array<ShareRow & { title: string; media_type: string; created_by_name: string | null }>;
 }
 
@@ -112,9 +232,101 @@ export function revokeShare(id: number, user: SessionUser): boolean {
   return r.changes > 0;
 }
 
+function shareScopeWhere(share: ShareRow): { sql: string; params: unknown[] } {
+  const type = share.target_type || 'media';
+  if (type === 'media') {
+    return { sql: 'id = ?', params: [share.media_id] };
+  }
+  if (type === 'library') {
+    return { sql: 'library_id = ?', params: [share.library_id] };
+  }
+  if (type === 'folder') {
+    const folder = share.folder_path || '';
+    return {
+      sql: 'library_id = ? AND (rel_path = ? OR rel_path LIKE ?)',
+      params: [share.library_id, folder, folder + '/%'],
+    };
+  }
+  if (type === 'series') {
+    if (share.season != null) {
+      return {
+        sql: 'library_id = ? AND show_name = ? AND season = ?',
+        params: [share.library_id, share.show_name, share.season],
+      };
+    }
+    return { sql: 'library_id = ? AND show_name = ?', params: [share.library_id, share.show_name] };
+  }
+  if (type === 'artist') {
+    if (share.album) {
+      return {
+        sql: 'library_id = ? AND artist = ? AND album = ?',
+        params: [share.library_id, share.artist, share.album],
+      };
+    }
+    return { sql: 'library_id = ? AND artist = ?', params: [share.library_id, share.artist] };
+  }
+  return { sql: '0', params: [] };
+}
+
+export function listShareItems(
+  share: ShareRow,
+  opts?: { q?: string; subfolder?: string }
+): MediaItem[] {
+  const db = getDb();
+  const scope = shareScopeWhere(share);
+  const where: string[] = [`(${scope.sql})`];
+  const params: unknown[] = [...scope.params];
+
+  if (opts?.subfolder) {
+    const sub = normalizeFolderPath(opts.subfolder, true);
+    if (sub) {
+      where.push('(rel_path = ? OR rel_path LIKE ?)');
+      params.push(sub, sub + '/%');
+    }
+  }
+  if (opts?.q && opts.q.trim()) {
+    const like = `%${opts.q.trim()}%`;
+    where.push('(title LIKE ? OR show_name LIKE ? OR artist LIKE ? OR album LIKE ? OR filename LIKE ?)');
+    params.push(like, like, like, like, like);
+  }
+
+  return db
+    .prepare(
+      `SELECT * FROM media_items WHERE ${where.join(' AND ')}
+       ORDER BY
+         CASE kind WHEN 'series' THEN show_name WHEN 'music' THEN artist ELSE title END,
+         season, episode, album, track_num, title`
+    )
+    .all(...params) as MediaItem[];
+}
+
+export function resolveShareItem(share: ShareRow, mediaId: number): MediaItem | null {
+  const id = Number(mediaId);
+  if (!id) return null;
+  const scope = shareScopeWhere(share);
+  const item = getDb()
+    .prepare(`SELECT * FROM media_items WHERE (${scope.sql}) AND id = ?`)
+    .get(...scope.params, id) as MediaItem | undefined;
+  return item || null;
+}
+
 export type ShareAccess =
-  | { ok: true; share: ShareRow; media: MediaItem; needsPassword: false }
-  | { ok: true; share: ShareRow; media: MediaItem; needsPassword: true }
+  | {
+      ok: true;
+      share: ShareRow;
+      media: MediaItem | null;
+      items: MediaItem[];
+      title: string;
+      needsPassword: false;
+    }
+  | {
+      ok: true;
+      share: ShareRow;
+      media: MediaItem | null;
+      items: MediaItem[];
+      title: string;
+      needsPassword: true;
+    }
   | { ok: false; reason: string; badPassword?: boolean };
 
 export function resolveShare(token: string, password?: string, clientKey?: string): ShareAccess {
@@ -130,24 +342,28 @@ export function resolveShare(token: string, password?: string, clientKey?: strin
     return { ok: false, reason: "Nombre d'utilisations atteint" };
   }
 
-  const media = db.prepare('SELECT * FROM media_items WHERE id = ?').get(share.media_id) as
-    | MediaItem
-    | undefined;
-  if (!media) return { ok: false, reason: 'Média introuvable' };
+  const items = listShareItems(share);
+  const media = items[0] || null;
+  const title = share.label || media?.title || 'Partage';
 
-  const lib = getLibrary(media.library_id);
-  if (!lib || !lib.enabled) {
-    return { ok: false, reason: 'Bibliothèque désactivée' };
+  const libId = share.library_id || media?.library_id;
+  if (libId) {
+    const lib = getLibrary(libId);
+    if (!lib || !lib.enabled) {
+      return { ok: false, reason: 'Bibliothèque désactivée' };
+    }
+  } else if (!media) {
+    return { ok: false, reason: 'Média introuvable' };
   }
 
   if (share.password_hash) {
-    if (!password) return { ok: true, share, media, needsPassword: true };
+    if (!password) return { ok: true, share, media, items: [], title, needsPassword: true };
     if (!verifySharePassword(password, share.password_hash)) {
       return { ok: false, reason: 'Mot de passe incorrect', badPassword: true };
     }
   }
 
-  return { ok: true, share, media, needsPassword: false };
+  return { ok: true, share, media, items, title, needsPassword: false };
 }
 
 export function incrementShareUse(token: string): void {
@@ -178,16 +394,87 @@ export function _clearShareLeasesForTests(): void {
   activeLeases.clear();
 }
 
-export function assertCanShareMedia(user: SessionUser, mediaId: number): MediaItem {
+export function assertCanCreateShare(user: SessionUser, input: CreateShareInput): void {
   if (!user.can_share && user.role !== 'admin') {
     throw new Error('Partage non autorisé pour ce compte');
   }
+  const targetType: ShareTargetType = input.targetType || 'media';
+  let libraryId = input.libraryId != null ? Number(input.libraryId) : undefined;
+  if (targetType === 'media' || input.mediaId) {
+    const media = getDb()
+      .prepare('SELECT * FROM media_items WHERE id = ?')
+      .get(Number(input.mediaId)) as MediaItem | undefined;
+    if (targetType === 'media') {
+      if (!media) throw new Error('Média introuvable');
+      libraryId = media.library_id;
+    }
+  }
+  if (!libraryId) {
+    throw new Error('libraryId requis');
+  }
+  if (!userCanAccessLibrary(user, libraryId)) {
+    throw new Error('Accès refusé à cette bibliothèque');
+  }
+}
+
+export function assertCanShareMedia(user: SessionUser, mediaId: number): MediaItem {
+  assertCanCreateShare(user, { targetType: 'media', mediaId });
   const media = getDb().prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as
     | MediaItem
     | undefined;
   if (!media) throw new Error('Média introuvable');
-  if (!userCanAccessLibrary(user, media.library_id)) {
-    throw new Error('Accès refusé à cette bibliothèque');
-  }
   return media;
+}
+
+export interface FolderBrowseResult {
+  folder: string;
+  subfolders: Array<{ name: string; path: string; item_count: number }>;
+  items: MediaItem[];
+  total_in_tree: number;
+}
+
+export function browseLibraryFolder(libraryId: number, parentFolder = ''): FolderBrowseResult {
+  const parent = normalizeFolderPath(parentFolder, true);
+  const db = getDb();
+  const all = db
+    .prepare(
+      `SELECT * FROM media_items WHERE library_id = ?
+       ORDER BY rel_path, season, episode, album, track_num, title`
+    )
+    .all(libraryId) as MediaItem[];
+
+  const prefix = parent ? parent + '/' : '';
+  const subfolderNames = new Set<string>();
+  const directItems: MediaItem[] = [];
+  let total_in_tree = 0;
+
+  for (const it of all) {
+    const rel = String(it.rel_path || '').replace(/\\/g, '/');
+    if (parent) {
+      if (rel !== parent && !rel.startsWith(prefix)) continue;
+    }
+    total_in_tree += 1;
+    if (parent && rel === parent) {
+      directItems.push(it);
+      continue;
+    }
+    const rest = parent ? rel.slice(prefix.length) : rel;
+    const slash = rest.indexOf('/');
+    if (slash === -1) {
+      directItems.push(it);
+    } else {
+      subfolderNames.add(rest.slice(0, slash));
+    }
+  }
+
+  const subfolders = [...subfolderNames].sort().map((name) => {
+    const folderPath = parent ? `${parent}/${name}` : name;
+    const item_count = all.filter((it) => {
+      const rel = String(it.rel_path || '').replace(/\\/g, '/');
+      return rel === folderPath || rel.startsWith(folderPath + '/');
+    }).length;
+    return { name, path: folderPath, item_count };
+  });
+
+  return { folder: parent, subfolders, items: directItems, total_in_tree };
 }

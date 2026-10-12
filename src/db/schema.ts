@@ -81,7 +81,15 @@ function initSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS shares (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       token TEXT NOT NULL UNIQUE,
-      media_id INTEGER NOT NULL,
+      target_type TEXT NOT NULL CHECK(target_type IN ('media','library','folder','series','artist')) DEFAULT 'media',
+      media_id INTEGER,
+      library_id INTEGER,
+      folder_path TEXT,
+      show_name TEXT,
+      season INTEGER,
+      artist TEXT,
+      album TEXT,
+      label TEXT,
       created_by INTEGER,
       password_hash TEXT,
       expires_at TEXT,
@@ -90,6 +98,7 @@ function initSchema(database: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       revoked INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE,
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     );
 
@@ -100,6 +109,55 @@ function initSchema(database: Database.Database): void {
       value TEXT NOT NULL
     );
   `);
+  migrateSharesTableIfNeeded(database);
+}
+
+function migrateSharesTableIfNeeded(database: Database.Database): void {
+  const cols = database.prepare(`PRAGMA table_info(shares)`).all() as Array<{ name: string }>;
+  if (!cols.length) return;
+  if (cols.some((c) => c.name === 'target_type')) return;
+
+  database.pragma('foreign_keys = OFF');
+  database.exec(`
+    BEGIN;
+    ALTER TABLE shares RENAME TO shares_legacy;
+    CREATE TABLE shares (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token TEXT NOT NULL UNIQUE,
+      target_type TEXT NOT NULL CHECK(target_type IN ('media','library','folder','series','artist')) DEFAULT 'media',
+      media_id INTEGER,
+      library_id INTEGER,
+      folder_path TEXT,
+      show_name TEXT,
+      season INTEGER,
+      artist TEXT,
+      album TEXT,
+      label TEXT,
+      created_by INTEGER,
+      password_hash TEXT,
+      expires_at TEXT,
+      max_uses INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      revoked INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+    INSERT INTO shares (
+      id, token, target_type, media_id, library_id, label,
+      created_by, password_hash, expires_at, max_uses, use_count, created_at, revoked
+    )
+    SELECT
+      s.id, s.token, 'media', s.media_id, m.library_id, m.title,
+      s.created_by, s.password_hash, s.expires_at, s.max_uses, s.use_count, s.created_at, s.revoked
+    FROM shares_legacy s
+    LEFT JOIN media_items m ON m.id = s.media_id;
+    DROP TABLE shares_legacy;
+    CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
+    COMMIT;
+  `);
+  database.pragma('foreign_keys = ON');
 }
 
 function seedDefaults(database: Database.Database): void {
@@ -185,10 +243,20 @@ export interface MediaItem {
   updated_at: string;
 }
 
+export type ShareTargetType = 'media' | 'library' | 'folder' | 'series' | 'artist';
+
 export interface ShareRow {
   id: number;
   token: string;
-  media_id: number;
+  target_type: ShareTargetType;
+  media_id: number | null;
+  library_id: number | null;
+  folder_path: string | null;
+  show_name: string | null;
+  season: number | null;
+  artist: string | null;
+  album: string | null;
+  label: string | null;
   created_by: number | null;
   password_hash: string | null;
   expires_at: string | null;

@@ -75,6 +75,9 @@
     <div class="modal" style="width:min(520px,100%)">
       <h2>Ouvrir dans VLC</h2>
       <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / AC3 5.1 inclus). Le mode Compatible navigateur downmixe en AAC stéréo.</p>
+      <div class="qr-box">
+        <img id="vlcQrImg" alt="QR Code VLC" />
+      </div>
       <div class="field">
         <label>URL flux réseau</label>
         <input id="vlcUrl" type="text" readonly />
@@ -91,7 +94,7 @@
 
   <div class="modal-backdrop hidden" id="shareModal">
     <div class="modal">
-      <h2>Lien de partage (1 média)</h2>
+      <h2 id="shareModalTitle">Lien de partage</h2>
       <p class="muted" id="shareMediaTitle"></p>
       <div class="field">
         <label for="shareExpires">Expiration (optionnel)</label>
@@ -113,9 +116,31 @@
       </div>
       <p class="error hidden" id="shareError"></p>
       <p class="ok hidden" id="shareResult"></p>
+      <div class="qr-box hidden" id="shareQrBox">
+        <img id="shareQrImg" alt="QR Code du partage" />
+        <input id="shareUrlOut" type="text" readonly />
+      </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="shareCancel" type="button">Fermer</button>
         <button class="btn btn-primary" id="shareCreate" type="button">Créer</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="qrModal">
+    <div class="modal">
+      <h2 id="qrModalTitle">QR Code</h2>
+      <p class="muted" id="qrModalSub"></p>
+      <div class="qr-box">
+        <img id="qrModalImg" alt="QR Code" />
+      </div>
+      <div class="field">
+        <input id="qrModalUrl" type="text" readonly />
+      </div>
+      <p class="ok hidden" id="qrModalCopied">Lien copié</p>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="qrModalCopy" type="button">Copier le lien</button>
+        <button class="btn btn-ghost" id="qrModalClose" type="button">Fermer</button>
       </div>
     </div>
   </div>

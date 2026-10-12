@@ -6,6 +6,7 @@ import {
   buildRawStreamUrl,
   buildM3uContent,
   buildShareRawStreamUrl,
+  buildMultiM3uContent,
   _clearStreamTokensForTests,
 } from '../src/auth/streamTokens';
 
@@ -50,6 +51,19 @@ describe('stream tokens + URL helpers', () => {
     assert.ok(u1.includes('/api/public/stream/sharetok'));
     const u2 = buildShareRawStreamUrl('sharetok', 'secret');
     assert.ok(u2.includes('password=secret'));
+    const u3 = buildShareRawStreamUrl('sharetok', undefined, 42, 'https://media.example');
+    assert.ok(u3.includes('/api/public/share/sharetok/item/42/stream'));
+  });
+
+  it('builds multi-entry m3u playlists', () => {
+    const m3u = buildMultiM3uContent([
+      { title: 'A', streamUrl: 'http://x/a' },
+      { title: 'B', streamUrl: 'http://x/b' },
+    ]);
+    assert.ok(m3u.startsWith('#EXTM3U'));
+    assert.equal((m3u.match(/#EXTINF/g) || []).length, 2);
+    assert.ok(m3u.includes('http://x/a'));
+    assert.ok(m3u.includes('http://x/b'));
   });
 
   it('sanitizes newlines in m3u titles', () => {
