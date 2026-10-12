@@ -125,7 +125,12 @@ describe('sqlite driver adapter', () => {
     }
   });
 
-  it('can be pinned to better-sqlite3 via NAS_SM_SQLITE_BACKEND', () => {
+  it('can be pinned to better-sqlite3 via NAS_SM_SQLITE_BACKEND', (t) => {
+    if (!hasBetterSqlite3()) {
+      // Native addon not compiled (e.g. CI with --ignore-scripts).
+      t.skip('better-sqlite3 native addon not built');
+      return;
+    }
     process.env.NAS_SM_SQLITE_BACKEND = 'better-sqlite3';
     assert.equal(activeBackend(), 'better-sqlite3');
     const db = open(path.join(tmp, 'g.db'));
@@ -148,6 +153,23 @@ function hasNodeSqlite(): boolean {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require('node:sqlite');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The better-sqlite3 fallback needs its native addon compiled. CI installs
+ * dependencies with --ignore-scripts (the SPK path never uses it), so the
+ * fallback test must skip rather than fail when the addon is absent.
+ */
+function hasBetterSqlite3(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Database = require('better-sqlite3');
+    const probe = new Database(':memory:');
+    probe.close();
     return true;
   } catch {
     return false;
