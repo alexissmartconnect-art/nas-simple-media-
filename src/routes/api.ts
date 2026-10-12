@@ -14,9 +14,19 @@ import {
   listShares,
   revokeShare,
   resolveShare,
+  resolveShareItem,
   consumeShareUse,
-  assertCanShareMedia,
+  assertCanCreateShare,
+  browseLibraryFolder,
+  listShareItems,
+  type CreateShareInput,
 } from '../shares/shares';
+import {
+  generateQrSvg,
+  resolvePublicBaseUrl,
+  setCustomPublicBaseUrl,
+  qrApiUrl,
+} from '../shares/qr';
 import { streamFile, isPathAllowed } from './stream';
 import {
   authenticate,
@@ -46,6 +56,7 @@ import {
   buildRawStreamUrl,
   buildShareRawStreamUrl,
   buildM3uContent,
+  buildMultiM3uContent,
 } from '../auth/streamTokens';
 import { getPlaybackHint } from '../transcode/formats';
 import {
@@ -73,6 +84,14 @@ function shareClientKey(req: Request): string {
   const ip = clientIp(req);
   const ua = String(req.headers['user-agent'] || '').slice(0, 80);
   return `${ip}|${ua}`;
+}
+
+function publicBase(req: Request): string {
+  return resolvePublicBaseUrl(req);
+}
+
+function shareLink(token: string, req: Request): string {
+  return `${publicBase(req)}/s/${token}`;
 }
 
 function pipeSegmentFile(file: string, contentType: string, res: Response, cacheHeader?: string): void {
@@ -143,6 +162,37 @@ apiRouter.post('/me/password', requireAuth, (req, res) => {
     const newPassword = String(req.body?.newPassword || '');
     changeOwnPassword(user.id, currentPassword, newPassword);
     res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
+apiRouter.get('/qr', async (req, res) => {
+  try {
+    const text = String(req.query.text || '');
+    const svg = await generateQrSvg(text);
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(svg);
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
+apiRouter.get('/folders', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const libraryId = Number(req.query.library_id);
+  if (!libraryId) {
+    res.status(400).json({ error: 'library_id requis' });
+    return;
+  }
+  if (!userCanAccessLibrary(user, libraryId)) {
+    res.status(403).json({ error: 'Accès refusé' });
+    return;
+  }
+  const folderPath = String(req.query.path || '');
+  try {
+    res.json(browseLibraryFolder(libraryId, folderPath));
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
   }
@@ -412,11 +462,13 @@ apiRouter.get('/media/:id/vlc', requireAuth, (req, res) => {
     return;
   }
   const token = createStreamToken({ mediaId: item.id, userId: user.id, scope: 'raw' });
-  const streamUrl = buildRawStreamUrl(item.id, token);
-  const m3uUrl = `${config.PUBLIC_BASE_URL}/api/media/${item.id}/playlist.m3u?token=${encodeURIComponent(token)}`;
+  const base = publicBase(req);
+  const streamUrl = buildRawStreamUrl(item.id, token, base);
+  const m3uUrl = `${base}/api/media/${item.id}/playlist.m3u?token=${encodeURIComponent(token)}`;
   res.json({
     streamUrl,
     m3uUrl,
+    qrUrl: qrApiUrl(streamUrl),
     vlcUri: `vlc://${streamUrl.replace(/^https?:\/\//, '')}`,
     help:
       'Dans VLC : Média → Ouvrir un flux réseau → collez streamUrl. Ou en CLI : vlc "<streamUrl>". ' +
@@ -439,7 +491,7 @@ apiRouter.get('/media/:id/playlist.m3u', (req, res) => {
     }
     token = createStreamToken({ mediaId: item.id, userId: user.id, scope: 'raw' });
   }
-  const streamUrl = buildRawStreamUrl(item.id, token);
+  const streamUrl = buildRawStreamUrl(item.id, token, publicBase(req));
   const body = buildM3uContent(item.title, streamUrl);
   res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
   res.setHeader(
@@ -539,7 +591,7 @@ apiRouter.get('/status', requireAuth, (req, res) => {
     | undefined;
   res.json({
     mediaPath: config.MEDIA_PATH,
-    publicBaseUrl: config.PUBLIC_BASE_URL,
+    publicBaseUrl: resolvePublicBaseUrl(req),
     counts,
     lastScan: last?.value || null,
     user,
@@ -553,26 +605,41 @@ apiRouter.get('/status', requireAuth, (req, res) => {
 
 // ---- Shares ----
 apiRouter.get('/shares', requireAuth, (req, res) => {
-  res.json({ shares: listShares(okUser(req as AuthedRequest)) });
+  const base = publicBase(req);
+  const shares = listShares(okUser(req as AuthedRequest)).map((s) => {
+    const url = `${base}/s/${s.token}`;
+    return { ...s, url, qrUrl: qrApiUrl(url) };
+  });
+  res.json({ shares, publicBaseUrl: base });
 });
 
 apiRouter.post('/shares', requireAuth, (req, res) => {
   try {
     const user = okUser(req as AuthedRequest);
-    const mediaId = Number(req.body?.mediaId);
-    if (!mediaId) {
-      res.status(400).json({ error: 'mediaId required' });
-      return;
-    }
-    assertCanShareMedia(user, mediaId);
-    const share = createShare({
-      mediaId,
+    const targetType = (req.body?.targetType || (req.body?.mediaId ? 'media' : '')) as CreateShareInput['targetType'];
+    const input: CreateShareInput = {
+      targetType: targetType || 'media',
+      mediaId: req.body?.mediaId != null && req.body.mediaId !== '' ? Number(req.body.mediaId) : undefined,
+      libraryId: req.body?.libraryId != null && req.body.libraryId !== '' ? Number(req.body.libraryId) : undefined,
+      folderPath: req.body?.folderPath || undefined,
+      showName: req.body?.showName || undefined,
+      season: req.body?.season != null && req.body.season !== '' ? Number(req.body.season) : undefined,
+      artist: req.body?.artist || undefined,
+      album: req.body?.album || undefined,
+      label: req.body?.label || undefined,
       expiresAt: req.body?.expiresAt || null,
       maxUses: req.body?.maxUses != null && req.body.maxUses !== '' ? Number(req.body.maxUses) : null,
       password: req.body?.password || null,
       createdBy: user.id,
-    });
-    res.status(201).json(share);
+    };
+    if (input.targetType === 'media' && !input.mediaId) {
+      res.status(400).json({ error: 'mediaId required' });
+      return;
+    }
+    assertCanCreateShare(user, input);
+    const share = createShare(input, publicBase(req));
+    const url = share.url;
+    res.status(201).json({ ...share, url, qrUrl: qrApiUrl(url) });
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
   }
@@ -709,6 +776,17 @@ apiRouter.delete('/admin/libraries/:id', requireAuth, requireAdmin, (req, res) =
   res.json({ ok: true });
 });
 
+apiRouter.put('/admin/settings/public-url', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const raw = req.body?.publicBaseUrl ?? req.body?.public_base_url ?? null;
+    const saved = setCustomPublicBaseUrl(raw === '' ? null : raw);
+    const url = saved || resolvePublicBaseUrl(req);
+    res.json({ ok: true, publicBaseUrl: url });
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
 // ---- Public share helpers ----
 function checkPublicShareAccess(req: Request, res: Response) {
   const token = req.params.token;
@@ -740,32 +818,207 @@ function checkPublicShareAccess(req: Request, res: Response) {
   return { access, password, clientKey: cKey };
 }
 
+function enrichShareItem(item: MediaItem) {
+  return {
+    ...item,
+    playback: getPlaybackHint(item.filename || item.path, item.type),
+  };
+}
+
+function sendShareItemNotFound(res: Response): void {
+  res.status(404).json({ error: 'Not found' });
+}
+
 // ---- Public share routes ----
 apiRouter.get('/public/share/:token', (req, res) => {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return;
   const { access } = checked;
   if (access.needsPassword) {
-    res.json({ needsPassword: true, title: access.media.title, type: access.media.type });
+    res.json({
+      needsPassword: true,
+      title: access.title,
+      type: access.media?.type,
+      targetType: access.share.target_type,
+      shareTitle: access.title,
+    });
     return;
   }
-  const playback = getPlaybackHint(access.media.filename || access.media.path, access.media.type);
+  const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+  const subfolder = typeof req.query.subfolder === 'string' ? req.query.subfolder : undefined;
+  const items = q || subfolder ? listShareItems(access.share, { q, subfolder }) : access.items;
+  const first = items[0] || access.media;
+  const playback = first ? getPlaybackHint(first.filename || first.path, first.type) : null;
+  const shareUrl = shareLink(req.params.token, req);
   res.json({
     needsPassword: false,
-    id: access.media.id,
-    title: access.media.title,
-    type: access.media.type,
-    kind: access.media.kind,
-    artist: access.media.artist,
-    album: access.media.album,
-    show_name: access.media.show_name,
-    season: access.media.season,
-    episode: access.media.episode,
-    filename: access.media.filename,
-    size_bytes: access.media.size_bytes,
+    id: first?.id,
+    title: first?.title || access.title,
+    type: first?.type,
+    kind: first?.kind,
+    artist: first?.artist ?? access.share.artist,
+    album: first?.album ?? access.share.album,
+    show_name: first?.show_name ?? access.share.show_name,
+    season: first?.season ?? access.share.season,
+    episode: first?.episode,
+    filename: first?.filename,
+    size_bytes: first?.size_bytes,
     playback,
     transcodeEnabled: isTranscodeEnabled(),
+    targetType: access.share.target_type,
+    shareTitle: access.title,
+    folderPath: access.share.folder_path,
+    itemCount: items.length,
+    shareUrl,
+    qrUrl: qrApiUrl(shareUrl),
+    items: items.map(enrichShareItem),
   });
+});
+
+function loadPublicShareItem(req: Request, res: Response) {
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return null;
+  const { access, password, clientKey } = checked;
+  if (access.needsPassword) {
+    res.status(401).json({ error: 'Password required', needsPassword: true });
+    return null;
+  }
+  const mediaId = Number(req.params.mediaId);
+  const item = resolveShareItem(access.share, mediaId);
+  if (!item) {
+    sendShareItemNotFound(res);
+    return null;
+  }
+  return { access, password, clientKey, item };
+}
+
+apiRouter.get('/public/share/:token/item/:mediaId/stream', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  if (!isPathAllowed(loaded.item.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  consumeShareUse(req.params.token, loaded.clientKey);
+  streamFile(loaded.item.path, req, res);
+});
+
+apiRouter.get('/public/share/:token/item/:mediaId/download', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  if (!isPathAllowed(loaded.item.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  consumeShareUse(req.params.token, loaded.clientKey);
+  streamFile(loaded.item.path, req, res, {
+    download: true,
+    filename: loaded.item.filename,
+  });
+});
+
+apiRouter.get('/public/share/:token/item/:mediaId/vlc', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  const base = publicBase(req);
+  const streamUrl = buildShareRawStreamUrl(req.params.token, loaded.password, loaded.item.id, base);
+  const m3uUrl =
+    `${base}/api/public/share/${encodeURIComponent(req.params.token)}/item/${loaded.item.id}/playlist.m3u` +
+    (loaded.password ? `?password=${encodeURIComponent(loaded.password)}` : '');
+  res.json({
+    streamUrl,
+    m3uUrl,
+    qrUrl: qrApiUrl(streamUrl),
+    vlcUri: `vlc://${streamUrl.replace(/^https?:\/\//, '')}`,
+    help:
+      'VLC : Média → Ouvrir un flux réseau, ou téléchargez le .m3u. VLC lit le fichier original (DTS 5.1 inclus).',
+  });
+});
+
+apiRouter.get('/public/share/:token/item/:mediaId/playlist.m3u', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  const streamUrl = buildShareRawStreamUrl(
+    req.params.token,
+    loaded.password,
+    loaded.item.id,
+    publicBase(req)
+  );
+  const body = buildM3uContent(loaded.item.title, streamUrl);
+  res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent((loaded.item.title || 'share').replace(/[^\w.\- ]+/g, '_') + '.m3u')}`
+  );
+  res.send(body);
+});
+
+apiRouter.get('/public/share/:token/item/:mediaId/hls', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  if (loaded.item.type === 'track') {
+    res.status(400).json({ error: 'HLS Compatible est réservé à la vidéo' });
+    return;
+  }
+  if (!isPathAllowed(loaded.item.path)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return;
+  }
+  if (!isTranscodeEnabled()) {
+    res.status(503).json({ error: 'Transcodage désactivé', enabled: false });
+    return;
+  }
+  consumeShareUse(req.params.token, loaded.clientKey);
+  const st = ensureTranscode(loaded.item.id, loaded.item.path);
+  const pw = loaded.password ? `?password=${encodeURIComponent(loaded.password)}` : '';
+  res.json({
+    ...st,
+    playlistUrl: `/api/public/share/${encodeURIComponent(req.params.token)}/item/${loaded.item.id}/hls/playlist.m3u8${pw}`,
+  });
+});
+
+apiRouter.get('/public/share/:token/item/:mediaId/hls/playlist.m3u8', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  if (!isTranscodeEnabled()) {
+    res.status(503).json({ error: 'Transcodage désactivé' });
+    return;
+  }
+  consumeShareUse(req.params.token, loaded.clientKey);
+  ensureTranscode(loaded.item.id, loaded.item.path);
+  const pwQuery = loaded.password ? `password=${encodeURIComponent(loaded.password)}` : undefined;
+  const body = readPlaylist(loaded.item.id, pwQuery);
+  if (!body) {
+    res.status(202).json({
+      error: 'Transcodage en cours',
+      status: getJobStatus(loaded.item.id).status,
+      retryAfterMs: 1500,
+    });
+    return;
+  }
+  touchJob(loaded.item.id);
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(body);
+});
+
+apiRouter.get('/public/share/:token/item/:mediaId/hls/:segment', (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  consumeShareUse(req.params.token, loaded.clientKey);
+  const name = path.basename(req.params.segment);
+  const file = getSegmentFile(loaded.item.id, name);
+  if (!file) {
+    res.status(404).json({ error: 'Segment not found' });
+    return;
+  }
+  touchJob(loaded.item.id);
+  const ct = name.endsWith('.m3u8')
+    ? 'application/vnd.apple.mpegurl'
+    : name.endsWith('.ts')
+      ? 'video/mp2t'
+      : 'application/octet-stream';
+  pipeSegmentFile(file, ct, res, 'private, max-age=3600');
 });
 
 apiRouter.get('/public/stream/:token', (req, res) => {
@@ -774,6 +1027,10 @@ apiRouter.get('/public/stream/:token', (req, res) => {
   const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!access.media) {
+    res.status(404).json({ error: 'Not found' });
     return;
   }
   if (!isPathAllowed(access.media.path)) {
@@ -793,6 +1050,10 @@ apiRouter.get('/public/stream/:token/raw', (req, res) => {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
   }
+  if (!access.media) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
   if (!isPathAllowed(access.media.path)) {
     res.status(400).json({ error: 'Invalid path' });
     return;
@@ -807,6 +1068,10 @@ apiRouter.get('/public/download/:token', (req, res) => {
   const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!access.media) {
+    res.status(404).json({ error: 'Not found' });
     return;
   }
   if (!isPathAllowed(access.media.path)) {
@@ -828,13 +1093,17 @@ apiRouter.get('/public/vlc/:token', (req, res) => {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
   }
-  const streamUrl = buildShareRawStreamUrl(req.params.token, password);
+  const base = publicBase(req);
+  const items = access.items;
+  const mediaId = items.length > 1 ? items[0]?.id : undefined;
+  const streamUrl = buildShareRawStreamUrl(req.params.token, password, mediaId, base);
   const m3uUrl =
-    `${config.PUBLIC_BASE_URL}/api/public/playlist/${encodeURIComponent(req.params.token)}` +
+    `${base}/api/public/playlist/${encodeURIComponent(req.params.token)}` +
     (password ? `?password=${encodeURIComponent(password)}` : '');
   res.json({
     streamUrl,
     m3uUrl,
+    qrUrl: qrApiUrl(items.length > 1 ? m3uUrl : streamUrl),
     vlcUri: `vlc://${streamUrl.replace(/^https?:\/\//, '')}`,
     help:
       'VLC : Média → Ouvrir un flux réseau, ou téléchargez le .m3u. VLC lit le fichier original (DTS 5.1 inclus).',
@@ -849,12 +1118,25 @@ apiRouter.get('/public/playlist/:token', (req, res) => {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
   }
-  const streamUrl = buildShareRawStreamUrl(req.params.token, password);
-  const body = buildM3uContent(access.media.title, streamUrl);
+  const base = publicBase(req);
+  const items = access.items;
+  let body: string;
+  if (items.length > 1) {
+    body = buildMultiM3uContent(
+      items.map((it) => ({
+        title: it.title,
+        streamUrl: buildShareRawStreamUrl(req.params.token, password, it.id, base),
+      }))
+    );
+  } else {
+    const streamUrl = buildShareRawStreamUrl(req.params.token, password, items[0]?.id, base);
+    body = buildM3uContent(access.title || items[0]?.title || 'share', streamUrl);
+  }
+  const fname = (access.title || access.media?.title || 'share').replace(/[^\w.\- ]+/g, '_');
   res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename*=UTF-8''${encodeURIComponent((access.media.title || 'share').replace(/[^\w.\- ]+/g, '_') + '.m3u')}`
+    `attachment; filename*=UTF-8''${encodeURIComponent(fname + '.m3u')}`
   );
   res.send(body);
 });
@@ -865,6 +1147,10 @@ apiRouter.get('/public/hls/:token', (req, res) => {
   const { access, password, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!access.media) {
+    res.status(404).json({ error: 'Not found' });
     return;
   }
   if (access.media.type === 'track') {
@@ -896,6 +1182,10 @@ apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
   }
+  if (!access.media) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
   if (!isTranscodeEnabled()) {
     res.status(503).json({ error: 'Transcodage désactivé' });
     return;
@@ -924,6 +1214,10 @@ apiRouter.get('/public/hls/:token/:segment', (req, res) => {
   const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
+    return;
+  }
+  if (!access.media) {
+    res.status(404).json({ error: 'Not found' });
     return;
   }
   consumeShareUse(req.params.token, clientKey);

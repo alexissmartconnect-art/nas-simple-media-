@@ -77,12 +77,25 @@ export function revokeUserStreamTokens(userId: number): void {
   }
 }
 
-export function buildRawStreamUrl(mediaId: number, token: string): string {
-  return `${config.PUBLIC_BASE_URL}/api/stream/${mediaId}/raw?token=${encodeURIComponent(token)}`;
+function publicBase(baseUrl?: string): string {
+  return (baseUrl || config.PUBLIC_BASE_URL).replace(/\/+$/, '');
 }
 
-export function buildShareRawStreamUrl(shareToken: string, password?: string): string {
-  let url = `${config.PUBLIC_BASE_URL}/api/public/stream/${encodeURIComponent(shareToken)}`;
+export function buildRawStreamUrl(mediaId: number, token: string, baseUrl?: string): string {
+  return `${publicBase(baseUrl)}/api/stream/${mediaId}/raw?token=${encodeURIComponent(token)}`;
+}
+
+export function buildShareRawStreamUrl(
+  shareToken: string,
+  password?: string,
+  mediaId?: number,
+  baseUrl?: string
+): string {
+  const base = publicBase(baseUrl);
+  let url =
+    mediaId != null
+      ? `${base}/api/public/share/${encodeURIComponent(shareToken)}/item/${mediaId}/stream`
+      : `${base}/api/public/stream/${encodeURIComponent(shareToken)}`;
   if (password) url += `?password=${encodeURIComponent(password)}`;
   return url;
 }
@@ -90,6 +103,16 @@ export function buildShareRawStreamUrl(shareToken: string, password?: string): s
 export function buildM3uContent(title: string, streamUrl: string): string {
   const safeTitle = String(title || 'media').replace(/[\r\n]/g, ' ');
   return `#EXTM3U\n#EXTINF:-1,${safeTitle}\n${streamUrl}\n`;
+}
+
+export function buildMultiM3uContent(entries: Array<{ title: string; streamUrl: string }>): string {
+  const lines = ['#EXTM3U'];
+  for (const e of entries) {
+    const safeTitle = String(e.title || 'media').replace(/[\r\n]/g, ' ');
+    lines.push(`#EXTINF:-1,${safeTitle}`);
+    lines.push(e.streamUrl);
+  }
+  return lines.join('\n') + '\n';
 }
 
 /** Test helper — clear all tokens. */

@@ -220,4 +220,113 @@ describe('security, scanner, shares, HLS helpers & HTTP API', () => {
     });
     assert.equal(badRange.status, 416);
   });
+
+  it('supports public URL, QR codes, folder browse, folder shares and isolation', async () => {
+    const loginRes = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin-secret-password' }),
+    });
+    assert.equal(loginRes.status, 200);
+    const cookie = (loginRes.headers.get('set-cookie') || '').split(';')[0];
+
+    const putUrl = await fetch(`${baseUrl}/api/admin/settings/public-url`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ publicBaseUrl: 'https://media.example.ts.net' }),
+    });
+    assert.equal(putUrl.status, 200);
+    const putData = (await putUrl.json()) as { publicBaseUrl: string };
+    assert.equal(putData.publicBaseUrl, 'https://media.example.ts.net');
+
+    const qrRes = await fetch(`${baseUrl}/api/qr?text=${encodeURIComponent('https://media.example.ts.net/s/abc')}`);
+    assert.equal(qrRes.status, 200);
+    assert.match(qrRes.headers.get('content-type') || '', /image\/svg\+xml/);
+    const svg = await qrRes.text();
+    assert.ok(svg.includes('<svg'));
+
+    const libsRes = await fetch(`${baseUrl}/api/libraries`, { headers: { Cookie: cookie } });
+    const libsData = (await libsRes.json()) as {
+      libraries: Array<{ id: number; type: string; name: string }>;
+    };
+    const seriesLib = libsData.libraries.find((l) => l.type === 'series');
+    assert.ok(seriesLib);
+
+    const foldersRes = await fetch(`${baseUrl}/api/folders?library_id=${seriesLib!.id}`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(foldersRes.status, 200);
+    const folders = (await foldersRes.json()) as {
+      subfolders: Array<{ name: string; path: string }>;
+      items: unknown[];
+      total_in_tree: number;
+    };
+    assert.ok(folders.total_in_tree >= 1);
+
+    const seriesDir = path.join(process.env.MEDIA_PATH!, 'Series', 'Dark');
+    fs.writeFileSync(path.join(seriesDir, 'Dark.S01E02.mkv'), 'EPISODE_2_DATA');
+    const otherDir = path.join(process.env.MEDIA_PATH!, 'Series', 'OtherShow');
+    fs.mkdirSync(otherDir, { recursive: true });
+    fs.writeFileSync(path.join(otherDir, 'Other.S01E01.mkv'), 'OTHER_EP_DATA');
+    const { scanLibrary } = await import('../src/scanner/scan');
+    scanLibrary();
+
+    const { getDb } = await import('../src/db/schema');
+    const darkEps = getDb()
+      .prepare(`SELECT id, rel_path FROM media_items WHERE rel_path LIKE 'Dark/%' ORDER BY filename`)
+      .all() as Array<{ id: number; rel_path: string }>;
+    assert.ok(darkEps.length >= 2);
+    const otherEp = getDb()
+      .prepare(`SELECT id FROM media_items WHERE rel_path LIKE 'OtherShow/%' LIMIT 1`)
+      .get() as { id: number };
+    assert.ok(otherEp);
+
+    const shareRes = await fetch(`${baseUrl}/api/shares`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        targetType: 'folder',
+        libraryId: seriesLib!.id,
+        folderPath: 'Dark',
+      }),
+    });
+    assert.equal(shareRes.status, 201);
+    const share = (await shareRes.json()) as { token: string; url: string; qrUrl: string };
+    assert.ok(share.token);
+    assert.ok(share.url.includes('https://media.example.ts.net/s/'));
+    assert.ok(share.qrUrl.startsWith('/api/qr?text='));
+
+    const publicRes = await fetch(`${baseUrl}/api/public/share/${share.token}`);
+    assert.equal(publicRes.status, 200);
+    const pub = (await publicRes.json()) as {
+      targetType: string;
+      itemCount: number;
+      items: Array<{ id: number }>;
+      shareUrl: string;
+      qrUrl: string;
+    };
+    assert.equal(pub.targetType, 'folder');
+    assert.ok(pub.itemCount >= 2);
+    assert.ok(pub.items.some((i) => i.id === darkEps[0].id));
+    assert.equal(pub.items.some((i) => i.id === otherEp.id), false);
+
+    const streamOk = await fetch(
+      `${baseUrl}/api/public/share/${share.token}/item/${darkEps[0].id}/stream`
+    );
+    assert.equal(streamOk.status, 200);
+    assert.equal(await streamOk.text(), 'EPISODE_1_DATA');
+
+    const streamBlocked = await fetch(
+      `${baseUrl}/api/public/share/${share.token}/item/${otherEp.id}/stream`
+    );
+    assert.equal(streamBlocked.status, 404);
+
+    const playlistRes = await fetch(`${baseUrl}/api/public/playlist/${share.token}`);
+    assert.equal(playlistRes.status, 200);
+    const m3u = await playlistRes.text();
+    assert.ok(m3u.startsWith('#EXTM3U'));
+    const infCount = (m3u.match(/#EXTINF/g) || []).length;
+    assert.ok(infCount >= 2);
+    assert.ok(m3u.includes(`/api/public/share/${share.token}/item/`));
+  });
 });

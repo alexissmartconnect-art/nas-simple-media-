@@ -22,26 +22,39 @@
       <p class="error hidden" id="pwdErr"></p>
       <button class="btn btn-primary" id="pwdBtn" type="submit" style="width:100%">Ouvrir</button>
     </form>
-    <div id="playerBox" class="hidden">
+    <div id="portalBox" class="hidden">
       <h2 id="title" class="section-title"></h2>
       <p class="muted" id="meta"></p>
-      <div class="player-toolbar" style="margin:0.75rem 0">
-        <div class="player-controls-row">
-          <div class="mode-toggle" id="modeToggle">
-            <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
-            <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
-          </div>
-          <div class="player-actions">
-            <a class="btn" id="btnDownload" href="#">Télécharger</a>
-            <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
-            <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
-          </div>
-        </div>
-        <p class="muted player-hint" id="playerHint"></p>
+      <div class="share-portal-toolbar">
+        <input id="shareSearch" type="search" placeholder="Rechercher dans ce partage…" style="flex:1;min-width:180px" />
+        <button class="btn btn-primary" type="button" id="btnPlayAll">▶ Tout lire</button>
+        <button class="btn" type="button" id="btnQr">📱 QR Code</button>
+        <a class="btn" id="btnPlaylist" href="#" download>📥 Playlist .m3u (VLC)</a>
       </div>
-      <div style="margin-top:1rem">
-        <video id="video" controls playsinline class="hidden"></video>
-        <audio id="audio" controls class="hidden"></audio>
+      <div id="itemList"></div>
+      <div id="playerBox" class="hidden" style="margin-top:1.25rem">
+        <h3 id="nowTitle" class="section-title"></h3>
+        <p class="muted" id="nowMeta"></p>
+        <div class="player-toolbar" style="margin:0.75rem 0">
+          <div class="player-controls-row">
+            <div class="mode-toggle" id="modeToggle">
+              <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
+              <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
+            </div>
+            <div class="player-actions">
+              <button class="btn btn-sm" type="button" id="btnPrev">⏮ Préc.</button>
+              <button class="btn btn-sm" type="button" id="btnNext">⏭ Suiv.</button>
+              <a class="btn" id="btnDownload" href="#">Télécharger</a>
+              <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
+              <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
+            </div>
+          </div>
+          <p class="muted player-hint" id="playerHint"></p>
+        </div>
+        <div style="margin-top:1rem">
+          <video id="video" controls playsinline class="hidden"></video>
+          <audio id="audio" controls class="hidden"></audio>
+        </div>
       </div>
     </div>
     <div id="errBox" class="empty hidden"></div>
@@ -51,6 +64,9 @@
     <div class="modal" style="width:min(520px,100%)">
       <h2>Ouvrir dans VLC</h2>
       <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / AC3 5.1 inclus). Le mode Compatible navigateur downmixe en AAC stéréo.</p>
+      <div class="qr-box">
+        <img id="vlcQrImg" alt="QR Code VLC" />
+      </div>
       <div class="field">
         <label>URL flux réseau</label>
         <input id="vlcUrl" type="text" readonly />
@@ -65,22 +81,51 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="qrModal">
+    <div class="modal">
+      <h2>QR Code du partage</h2>
+      <div class="qr-box">
+        <img id="qrImg" alt="QR Code" />
+      </div>
+      <div class="field">
+        <input id="qrUrl" type="text" readonly />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="qrCopy" type="button">Copier le lien</button>
+        <button class="btn btn-ghost" id="qrClose" type="button">Fermer</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
   <script>
     const token = location.pathname.split('/').pop();
     let password = '';
     let meta = null;
+    let items = [];
+    let filtered = [];
+    let current = null;
+    let queueIndex = -1;
     let hls = null;
     let playMode = 'direct';
+
+    const $ = (id) => document.getElementById(id);
 
     function pwQs() {
       return password ? ('?password=' + encodeURIComponent(password)) : '';
     }
-
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function itemStream(id) {
+      return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/stream' + pwQs();
+    }
+    function itemHls(id) {
+      return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/hls' + pwQs();
+    }
     function destroyHls() {
       if (hls) { try { hls.destroy(); } catch {} hls = null; }
     }
-
     function setMode(mode) {
       playMode = mode;
       document.querySelectorAll('.mode-btn').forEach((b) => {
@@ -88,12 +133,12 @@
       });
     }
 
-    async function playDirect() {
+    async function playDirect(item) {
       destroyHls();
-      const stream = '/api/public/stream/' + encodeURIComponent(token) + pwQs();
-      const video = document.getElementById('video');
-      const audio = document.getElementById('audio');
-      if (meta.type === 'track') {
+      const stream = itemStream(item.id);
+      const video = $('video');
+      const audio = $('audio');
+      if (item.type === 'track') {
         audio.classList.remove('hidden');
         video.classList.add('hidden');
         audio.src = stream;
@@ -104,10 +149,10 @@
         video.src = stream;
         const onErr = () => {
           video.removeEventListener('error', onErr);
-          if (meta.transcodeEnabled !== false) {
-            document.getElementById('playerHint').textContent = 'Direct impossible — bascule Compatible…';
+          if (item.transcodeEnabled !== false && meta.transcodeEnabled !== false) {
+            $('playerHint').textContent = 'Direct impossible — bascule Compatible…';
             setMode('compatible');
-            playCompatible();
+            playCompatible(item);
           }
         };
         video.addEventListener('error', onErr);
@@ -115,18 +160,18 @@
       }
     }
 
-    async function playCompatible() {
+    async function playCompatible(item) {
       destroyHls();
-      const video = document.getElementById('video');
-      const audio = document.getElementById('audio');
+      const video = $('video');
+      const audio = $('audio');
       audio.classList.add('hidden');
       video.classList.remove('hidden');
       video.removeAttribute('src');
-      document.getElementById('playerHint').textContent = 'Transcodage Compatible (H.264+AAC stéréo)…';
-      const res = await fetch('/api/public/hls/' + encodeURIComponent(token) + pwQs());
+      $('playerHint').textContent = 'Transcodage Compatible (H.264+AAC stéréo)…';
+      const res = await fetch(itemHls(item.id));
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        document.getElementById('playerHint').textContent = data.error || 'Compatible indisponible — utilisez VLC.';
+        $('playerHint').textContent = data.error || 'Compatible indisponible — utilisez VLC.';
         return;
       }
       const playlistUrl = data.playlistUrl;
@@ -138,7 +183,7 @@
         }
         await new Promise((x) => setTimeout(x, 1200));
         if (i === 39) {
-          document.getElementById('playerHint').textContent = 'Transcodage trop long — préférez VLC.';
+          $('playerHint').textContent = 'Transcodage trop long — préférez VLC.';
           return;
         }
       }
@@ -151,8 +196,115 @@
         video.src = playlistUrl;
         video.play().catch(() => {});
       } else {
-        document.getElementById('playerHint').textContent = 'HLS non supporté — utilisez VLC.';
+        $('playerHint').textContent = 'HLS non supporté — utilisez VLC.';
       }
+    }
+
+    function playItem(item) {
+      current = item;
+      queueIndex = filtered.findIndex((x) => x.id === item.id);
+      $('playerBox').classList.remove('hidden');
+      $('nowTitle').textContent = item.title;
+      const bits = [];
+      if (item.show_name) bits.push(item.show_name + (item.season != null ? ` S${String(item.season).padStart(2,'0')}E${String(item.episode).padStart(2,'0')}` : ''));
+      if (item.artist) bits.push(item.artist + (item.album ? ' — ' + item.album : ''));
+      bits.push(item.type);
+      $('nowMeta').textContent = bits.join(' · ');
+      $('btnDownload').href = '/api/public/share/' + encodeURIComponent(token) + '/item/' + item.id + '/download' + pwQs();
+      $('btnM3u').href = '/api/public/share/' + encodeURIComponent(token) + '/item/' + item.id + '/playlist.m3u' + pwQs();
+      $('modeToggle').classList.toggle('hidden', item.type === 'track');
+      $('playerHint').textContent =
+        (item.playback && item.playback.reason ? item.playback.reason + ' — ' : '') +
+        'Direct = original. Compatible = H.264+AAC stéréo. VLC pour DTS 5.1.';
+      const mode = (item.type !== 'track' && item.playback && item.playback.suggestedMode === 'compatible' && meta.transcodeEnabled !== false)
+        ? 'compatible' : 'direct';
+      setMode(mode);
+      if (mode === 'compatible') playCompatible(item);
+      else playDirect(item);
+      renderList();
+    }
+
+    function playNext() {
+      if (queueIndex >= 0 && queueIndex < filtered.length - 1) playItem(filtered[queueIndex + 1]);
+    }
+    function playPrev() {
+      if (queueIndex > 0) playItem(filtered[queueIndex - 1]);
+    }
+
+    function groupHtml(list) {
+      if (!list.length) return '<div class="empty">Aucun média.</div>';
+      const isSeries = list.some((i) => i.type === 'episode');
+      const isMusic = list.some((i) => i.type === 'track');
+      if (isSeries) {
+        const groups = new Map();
+        for (const it of list) {
+          const s = it.season != null ? Number(it.season) : 1;
+          if (!groups.has(s)) groups.set(s, []);
+          groups.get(s).push(it);
+        }
+        let html = '';
+        for (const [season, eps] of groups.entries()) {
+          html += `<div class="group-header"><span>Saison ${season}</span><span class="muted">${eps.length} ép.</span></div>`;
+          html += listRows(eps);
+        }
+        return html;
+      }
+      if (isMusic) {
+        const groups = new Map();
+        for (const it of list) {
+          const alb = it.album || 'Album inconnu';
+          if (!groups.has(alb)) groups.set(alb, []);
+          groups.get(alb).push(it);
+        }
+        let html = '';
+        for (const [album, tracks] of groups.entries()) {
+          html += `<div class="group-header"><span>💿 ${escapeHtml(album)}</span><span class="muted">${tracks.length} piste(s)</span></div>`;
+          html += listRows(tracks);
+        }
+        return html;
+      }
+      return listRows(list);
+    }
+
+    function listRows(list) {
+      return `<div class="list">${list.map((it) => {
+        const playing = current && current.id === it.id ? ' playing' : '';
+        const extra = it.type === 'episode'
+          ? `S${String(it.season ?? 1).padStart(2,'0')}E${String(it.episode ?? 1).padStart(2,'0')}`
+          : (it.artist || it.type || '');
+        return `<div class="list-item${playing}" data-id="${it.id}">
+          <div class="left">
+            <div class="title">${escapeHtml(it.title)}</div>
+            <div class="meta">${escapeHtml(extra)}</div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary btn-play" type="button">Lire</button>
+          </div>
+        </div>`;
+      }).join('')}</div>`;
+    }
+
+    function renderList() {
+      $('itemList').innerHTML = groupHtml(filtered);
+      $('itemList').querySelectorAll('.list-item').forEach((row) => {
+        const id = Number(row.getAttribute('data-id'));
+        row.querySelector('.btn-play').addEventListener('click', () => {
+          const it = filtered.find((x) => x.id === id);
+          if (it) playItem(it);
+        });
+      });
+    }
+
+    function applyFilter() {
+      const q = ($('shareSearch').value || '').trim().toLowerCase();
+      filtered = !q
+        ? items.slice()
+        : items.filter((it) =>
+            [it.title, it.show_name, it.artist, it.album, it.filename]
+              .filter(Boolean)
+              .some((s) => String(s).toLowerCase().includes(q))
+          );
+      renderList();
     }
 
     async function load() {
@@ -160,74 +312,87 @@
       const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (password && !document.getElementById('pwdBox').classList.contains('hidden')) {
-          const pwdErr = document.getElementById('pwdErr');
+        if (password && !$('pwdBox').classList.contains('hidden')) {
+          const pwdErr = $('pwdErr');
           pwdErr.textContent = data.error || 'Mot de passe incorrect';
           pwdErr.classList.remove('hidden');
           return;
         }
-        document.getElementById('pwdBox').classList.add('hidden');
-        document.getElementById('playerBox').classList.add('hidden');
-        const box = document.getElementById('errBox');
+        $('pwdBox').classList.add('hidden');
+        $('portalBox').classList.add('hidden');
+        const box = $('errBox');
         box.textContent = data.error || 'Accès refusé';
         box.classList.remove('hidden');
         return;
       }
       if (data.needsPassword) {
-        document.getElementById('pwdBox').classList.remove('hidden');
-        document.getElementById('playerBox').classList.add('hidden');
+        $('pwdBox').classList.remove('hidden');
+        $('portalBox').classList.add('hidden');
         return;
       }
       meta = data;
-      document.getElementById('pwdBox').classList.add('hidden');
-      document.getElementById('errBox').classList.add('hidden');
-      document.getElementById('playerBox').classList.remove('hidden');
-      document.getElementById('title').textContent = data.title;
+      items = data.items && data.items.length ? data.items : [data];
+      items.forEach((it) => { it.transcodeEnabled = data.transcodeEnabled; });
+      filtered = items.slice();
+      $('pwdBox').classList.add('hidden');
+      $('errBox').classList.add('hidden');
+      $('portalBox').classList.remove('hidden');
+      $('title').textContent = data.shareTitle || data.title || 'Partage';
       const bits = [];
-      if (data.show_name) bits.push(data.show_name + (data.season != null ? ` S${String(data.season).padStart(2,'0')}E${String(data.episode).padStart(2,'0')}` : ''));
-      if (data.artist) bits.push(data.artist + (data.album ? ' — ' + data.album : ''));
-      bits.push(data.type);
-      document.getElementById('meta').textContent = bits.join(' · ');
-      document.getElementById('btnDownload').href = '/api/public/download/' + encodeURIComponent(token) + pwQs();
-      document.getElementById('btnM3u').href = '/api/public/playlist/' + encodeURIComponent(token) + pwQs();
-      document.getElementById('modeToggle').classList.toggle('hidden', data.type === 'track');
-      document.getElementById('playerHint').textContent =
-        (data.playback && data.playback.reason ? data.playback.reason + ' — ' : '') +
-        'Direct = original. Compatible = H.264+AAC stéréo. VLC pour DTS 5.1.';
-
-      const mode = (data.type !== 'track' && data.playback && data.playback.suggestedMode === 'compatible' && data.transcodeEnabled !== false)
-        ? 'compatible' : 'direct';
-      setMode(mode);
-      if (mode === 'compatible') playCompatible();
-      else playDirect();
+      if (data.targetType) bits.push(data.targetType);
+      bits.push((data.itemCount || items.length) + ' média(s)');
+      $('meta').textContent = bits.join(' · ');
+      $('btnPlaylist').href = '/api/public/playlist/' + encodeURIComponent(token) + pwQs();
+      applyFilter();
+      if (items.length === 1) playItem(items[0]);
     }
 
-    document.getElementById('pwdBox').addEventListener('submit', (e) => {
+    $('pwdBox').addEventListener('submit', (e) => {
       e.preventDefault();
-      password = document.getElementById('sharePwd').value;
-      document.getElementById('pwdErr').classList.add('hidden');
+      password = $('sharePwd').value;
+      $('pwdErr').classList.add('hidden');
       load();
     });
-    document.getElementById('btnModeDirect').addEventListener('click', () => { setMode('direct'); playDirect(); });
-    document.getElementById('btnModeCompat').addEventListener('click', () => { if (meta && meta.type !== 'track') { setMode('compatible'); playCompatible(); } });
-    document.getElementById('btnVlc').addEventListener('click', async () => {
-      const res = await fetch('/api/public/vlc/' + encodeURIComponent(token) + pwQs());
+    $('shareSearch').addEventListener('input', applyFilter);
+    $('btnPlayAll').addEventListener('click', () => {
+      if (filtered.length) playItem(filtered[0]);
+    });
+    $('btnQr').addEventListener('click', () => {
+      const url = meta.shareUrl || location.href;
+      $('qrUrl').value = url;
+      $('qrImg').src = meta.qrUrl || ('/api/qr?text=' + encodeURIComponent(url));
+      $('qrModal').classList.remove('hidden');
+    });
+    $('qrClose').addEventListener('click', () => $('qrModal').classList.add('hidden'));
+    $('qrCopy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText($('qrUrl').value); } catch {}
+    });
+    $('btnModeDirect').addEventListener('click', () => { if (current) { setMode('direct'); playDirect(current); } });
+    $('btnModeCompat').addEventListener('click', () => { if (current && current.type !== 'track') { setMode('compatible'); playCompatible(current); } });
+    $('btnPrev').addEventListener('click', playPrev);
+    $('btnNext').addEventListener('click', playNext);
+    $('video').addEventListener('ended', playNext);
+    $('audio').addEventListener('ended', playNext);
+    $('btnVlc').addEventListener('click', async () => {
+      if (!current) return;
+      const res = await fetch('/api/public/share/' + encodeURIComponent(token) + '/item/' + current.id + '/vlc' + pwQs());
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { alert(data.error || 'Erreur'); return; }
-      document.getElementById('vlcUrl').value = data.streamUrl;
-      document.getElementById('vlcM3uLink').href = data.m3uUrl;
-      document.getElementById('vlcCopied').classList.add('hidden');
-      document.getElementById('vlcModal').classList.remove('hidden');
+      $('vlcUrl').value = data.streamUrl;
+      $('vlcM3uLink').href = data.m3uUrl;
+      $('vlcQrImg').src = data.qrUrl || ('/api/qr?text=' + encodeURIComponent(data.streamUrl));
+      $('vlcCopied').classList.add('hidden');
+      $('vlcModal').classList.remove('hidden');
       try {
         await navigator.clipboard.writeText(data.streamUrl);
-        document.getElementById('vlcCopied').classList.remove('hidden');
+        $('vlcCopied').classList.remove('hidden');
       } catch {}
     });
-    document.getElementById('vlcClose').addEventListener('click', () => document.getElementById('vlcModal').classList.add('hidden'));
-    document.getElementById('vlcCopy').addEventListener('click', async () => {
+    $('vlcClose').addEventListener('click', () => $('vlcModal').classList.add('hidden'));
+    $('vlcCopy').addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(document.getElementById('vlcUrl').value);
-        document.getElementById('vlcCopied').classList.remove('hidden');
+        await navigator.clipboard.writeText($('vlcUrl').value);
+        $('vlcCopied').classList.remove('hidden');
       } catch {}
     });
     load();
