@@ -1,7 +1,12 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { config } from '../config';
 import { getDb, type MediaItem } from '../db/schema';
 import { createSession, destroySession, getSessionUser } from '../auth/session';
+import {
+  isRateLimited,
+  recordFailedAttempt,
+  clearFailedAttempts,
+} from '../auth/rateLimit';
 import { requireAuth, requireAdmin, type AuthedRequest } from '../middleware/auth';
 import { scanLibrary, startFileWatch } from '../scanner/scan';
 import {
@@ -9,11 +14,21 @@ import {
   listShares,
   revokeShare,
   resolveShare,
-  incrementShareUse,
+  consumeShareUse,
   assertCanShareMedia,
 } from '../shares/shares';
 import { streamFile, isPathAllowed } from './stream';
-import { authenticate, listUsers, createUser, updateUser, setUserLibraries, getUserLibraryIds } from '../users/users';
+import {
+  authenticate,
+  listUsers,
+  getUser,
+  createUser,
+  updateUser,
+  deleteUser,
+  changeOwnPassword,
+  setUserLibraries,
+  getUserLibraryIds,
+} from '../users/users';
 import {
   listLibrariesForUser,
   listAllLibraries,
@@ -50,14 +65,56 @@ function okUser(req: AuthedRequest) {
   return req.user;
 }
 
+function clientIp(req: Request): string {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function shareClientKey(req: Request): string {
+  const ip = clientIp(req);
+  const ua = String(req.headers['user-agent'] || '').slice(0, 80);
+  return `${ip}|${ua}`;
+}
+
+function pipeSegmentFile(file: string, contentType: string, res: Response, cacheHeader?: string): void {
+  res.setHeader('Content-Type', contentType);
+  if (cacheHeader) {
+    res.setHeader('Cache-Control', cacheHeader);
+  }
+  const stream = fs.createReadStream(file);
+  const cleanup = () => {
+    if (!stream.destroyed) stream.destroy();
+  };
+  res.on('close', cleanup);
+  stream.on('error', () => {
+    cleanup();
+    if (!res.headersSent) res.status(500).json({ error: 'Segment read error' });
+    else res.end();
+  });
+  stream.pipe(res);
+}
+
 apiRouter.post('/login', (req, res) => {
-  const username = String(req.body?.username || 'admin');
+  const username = String(req.body?.username || 'admin').trim();
   const password = String(req.body?.password || '');
+  const rateKey = `login:${clientIp(req)}:${username.toLowerCase()}`;
+
+  const rl = isRateLimited(rateKey);
+  if (rl.limited) {
+    res.setHeader('Retry-After', String(rl.retryAfterSec));
+    res.status(429).json({
+      error: `Trop de tentatives. Réessayez dans ${rl.retryAfterSec}s.`,
+    });
+    return;
+  }
+
   const user = authenticate(username, password);
   if (!user) {
+    recordFailedAttempt(rateKey);
     res.status(401).json({ error: 'Identifiants incorrects' });
     return;
   }
+
+  clearFailedAttempts(rateKey);
   const token = createSession(user);
   res.cookie(config.COOKIE_NAME, token, {
     httpOnly: true,
@@ -79,6 +136,18 @@ apiRouter.get('/me', (req, res) => {
   res.json({ authenticated: !!user, user: user || null });
 });
 
+apiRouter.post('/me/password', requireAuth, (req, res) => {
+  try {
+    const user = okUser(req as AuthedRequest);
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    changeOwnPassword(user.id, currentPassword, newPassword);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
 // ---- Libraries (user-visible) ----
 apiRouter.get('/libraries', requireAuth, (req, res) => {
   const user = okUser(req as AuthedRequest);
@@ -96,7 +165,7 @@ apiRouter.get('/media', requireAuth, (req, res) => {
   const artist = req.query.artist as string | undefined;
   const album = req.query.album as string | undefined;
   const limit = Math.min(parseInt(String(req.query.limit || '200'), 10) || 200, 1000);
-  const offset = parseInt(String(req.query.offset || '0'), 10) || 0;
+  const offset = Math.max(0, parseInt(String(req.query.offset || '0'), 10) || 0);
 
   const allowed = listLibrariesForUser(user).map((l) => l.id);
   if (!allowed.length) {
@@ -147,7 +216,7 @@ apiRouter.get('/media', requireAuth, (req, res) => {
       `SELECT * FROM media_items ${whereSql}
        ORDER BY
          CASE kind WHEN 'series' THEN show_name WHEN 'music' THEN artist ELSE title END,
-         season, episode, track_num, title
+         season, episode, album, track_num, title
        LIMIT ? OFFSET ?`
     )
     .all(...params, limit, offset) as MediaItem[];
@@ -237,8 +306,8 @@ function getAccessibleMedia(user: ReturnType<typeof okUser>, id: number): MediaI
 }
 
 function authStreamOrToken(
-  req: import('express').Request,
-  res: import('express').Response,
+  req: Request,
+  res: Response,
   mediaId: number,
   scope: 'raw' | 'download' | 'hls'
 ): MediaItem | null {
@@ -255,6 +324,28 @@ function authStreamOrToken(
     if (!item) {
       res.status(404).json({ error: 'Not found' });
       return null;
+    }
+    const lib = getLibrary(item.library_id);
+    if (!lib || !lib.enabled) {
+      res.status(403).json({ error: 'Library disabled' });
+      return null;
+    }
+    if (data.userId != null) {
+      const u = getUser(data.userId);
+      if (!u || !u.enabled) {
+        res.status(401).json({ error: 'User disabled' });
+        return null;
+      }
+      const sessionUser = {
+        id: u.id,
+        username: u.username,
+        role: u.role,
+        can_share: !!u.can_share,
+      };
+      if (!userCanAccessLibrary(sessionUser, item.library_id)) {
+        res.status(403).json({ error: 'Accès refusé' });
+        return null;
+      }
     }
     return item;
   }
@@ -397,7 +488,9 @@ apiRouter.get('/stream/:id/hls/playlist.m3u8', (req, res) => {
     return;
   }
   ensureTranscode(mediaId, item.path);
-  const body = readPlaylist(mediaId);
+  const qToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  const tokenQuery = qToken ? `token=${encodeURIComponent(qToken)}` : undefined;
+  const body = readPlaylist(mediaId, tokenQuery);
   if (!body) {
     res.status(202).json({
       error: 'Transcodage en cours',
@@ -428,9 +521,7 @@ apiRouter.get('/stream/:id/hls/:segment', (req, res) => {
     : name.endsWith('.ts')
       ? 'video/mp2t'
       : 'application/octet-stream';
-  res.setHeader('Content-Type', ct);
-  res.setHeader('Cache-Control', 'private, max-age=3600');
-  fs.createReadStream(file).pipe(res);
+  pipeSegmentFile(file, ct, res, 'private, max-age=3600');
 });
 
 apiRouter.get('/status', requireAuth, (req, res) => {
@@ -477,7 +568,7 @@ apiRouter.post('/shares', requireAuth, (req, res) => {
     const share = createShare({
       mediaId,
       expiresAt: req.body?.expiresAt || null,
-      maxUses: req.body?.maxUses != null ? Number(req.body.maxUses) : null,
+      maxUses: req.body?.maxUses != null && req.body.maxUses !== '' ? Number(req.body.maxUses) : null,
       password: req.body?.password || null,
       createdBy: user.id,
     });
@@ -552,6 +643,21 @@ apiRouter.patch('/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
+apiRouter.delete('/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const actor = okUser(req as AuthedRequest);
+    const id = Number(req.params.id);
+    const ok = deleteUser(id, actor.id);
+    if (!ok) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
 apiRouter.put('/admin/users/:id/libraries', requireAuth, requireAdmin, (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -603,14 +709,42 @@ apiRouter.delete('/admin/libraries/:id', requireAuth, requireAdmin, (req, res) =
   res.json({ ok: true });
 });
 
-// ---- Public share ----
-apiRouter.get('/public/share/:token', (req, res) => {
-  const password = (req.query.password as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
+// ---- Public share helpers ----
+function checkPublicShareAccess(req: Request, res: Response) {
+  const token = req.params.token;
+  const password =
+    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+  const rateKey = `share:${clientIp(req)}:${token}`;
+
+  const rl = isRateLimited(rateKey);
+  if (rl.limited) {
+    res.setHeader('Retry-After', String(rl.retryAfterSec));
+    res.status(429).json({
+      error: `Trop de tentatives. Réessayez dans ${rl.retryAfterSec}s.`,
+    });
+    return null;
   }
+
+  const cKey = shareClientKey(req);
+  const access = resolveShare(token, password, cKey);
+  if (!access.ok) {
+    if (access.badPassword) {
+      recordFailedAttempt(rateKey);
+    }
+    res.status(403).json({ error: access.reason });
+    return null;
+  }
+  if (!access.needsPassword && password) {
+    clearFailedAttempts(rateKey);
+  }
+  return { access, password, clientKey: cKey };
+}
+
+// ---- Public share routes ----
+apiRouter.get('/public/share/:token', (req, res) => {
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access } = checked;
   if (access.needsPassword) {
     res.json({ needsPassword: true, title: access.media.title, type: access.media.type });
     return;
@@ -628,19 +762,16 @@ apiRouter.get('/public/share/:token', (req, res) => {
     season: access.media.season,
     episode: access.media.episode,
     filename: access.media.filename,
+    size_bytes: access.media.size_bytes,
     playback,
     transcodeEnabled: isTranscodeEnabled(),
   });
 });
 
 apiRouter.get('/public/stream/:token', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -649,19 +780,15 @@ apiRouter.get('/public/stream/:token', (req, res) => {
     res.status(400).json({ error: 'Invalid path' });
     return;
   }
-  incrementShareUse(req.params.token);
+  consumeShareUse(req.params.token, clientKey);
   streamFile(access.media.path, req, res);
 });
 
 /** Alias for VLC: same as public stream (original + Range). */
 apiRouter.get('/public/stream/:token/raw', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -670,17 +797,14 @@ apiRouter.get('/public/stream/:token/raw', (req, res) => {
     res.status(400).json({ error: 'Invalid path' });
     return;
   }
+  consumeShareUse(req.params.token, clientKey);
   streamFile(access.media.path, req, res);
 });
 
 apiRouter.get('/public/download/:token', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -689,6 +813,7 @@ apiRouter.get('/public/download/:token', (req, res) => {
     res.status(400).json({ error: 'Invalid path' });
     return;
   }
+  consumeShareUse(req.params.token, clientKey);
   streamFile(access.media.path, req, res, {
     download: true,
     filename: access.media.filename,
@@ -696,13 +821,9 @@ apiRouter.get('/public/download/:token', (req, res) => {
 });
 
 apiRouter.get('/public/vlc/:token', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, password } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -721,13 +842,9 @@ apiRouter.get('/public/vlc/:token', (req, res) => {
 });
 
 apiRouter.get('/public/playlist/:token', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, password } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -743,13 +860,9 @@ apiRouter.get('/public/playlist/:token', (req, res) => {
 });
 
 apiRouter.get('/public/hls/:token', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, password, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -766,6 +879,7 @@ apiRouter.get('/public/hls/:token', (req, res) => {
     res.status(503).json({ error: 'Transcodage désactivé', enabled: false });
     return;
   }
+  consumeShareUse(req.params.token, clientKey);
   const st = ensureTranscode(access.media.id, access.media.path);
   const pw = password ? `?password=${encodeURIComponent(password)}` : '';
   res.json({
@@ -775,13 +889,9 @@ apiRouter.get('/public/hls/:token', (req, res) => {
 });
 
 apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, password, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -790,8 +900,10 @@ apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
     res.status(503).json({ error: 'Transcodage désactivé' });
     return;
   }
+  consumeShareUse(req.params.token, clientKey);
   ensureTranscode(access.media.id, access.media.path);
-  let body = readPlaylist(access.media.id);
+  const pwQuery = password ? `password=${encodeURIComponent(password)}` : undefined;
+  const body = readPlaylist(access.media.id, pwQuery);
   if (!body) {
     res.status(202).json({
       error: 'Transcodage en cours',
@@ -800,18 +912,6 @@ apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
     });
     return;
   }
-  if (password) {
-    const q = `?password=${encodeURIComponent(password)}`;
-    body = body
-      .split('\n')
-      .map((line) => {
-        const t = line.trim();
-        if (!t || t.startsWith('#')) return line;
-        if (t.includes('?')) return line;
-        return `${t}${q}`;
-      })
-      .join('\n');
-  }
   touchJob(access.media.id);
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-cache');
@@ -819,17 +919,14 @@ apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
 });
 
 apiRouter.get('/public/hls/:token/:segment', (req, res) => {
-  const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
-  const access = resolveShare(req.params.token, password);
-  if (!access.ok) {
-    res.status(403).json({ error: access.reason });
-    return;
-  }
+  const checked = checkPublicShareAccess(req, res);
+  if (!checked) return;
+  const { access, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
   }
+  consumeShareUse(req.params.token, clientKey);
   const name = path.basename(req.params.segment);
   const file = getSegmentFile(access.media.id, name);
   if (!file) {
@@ -842,8 +939,7 @@ apiRouter.get('/public/hls/:token/:segment', (req, res) => {
     : name.endsWith('.ts')
       ? 'video/mp2t'
       : 'application/octet-stream';
-  res.setHeader('Content-Type', ct);
-  fs.createReadStream(file).pipe(res);
+  pipeSegmentFile(file, ct, res, 'private, max-age=3600');
 });
 
 export function runInitialScan(): void {
@@ -856,7 +952,3 @@ export function runInitialScan(): void {
     startFileWatch();
   }
 }
-
-// silence unused
-void getLibrary;
-void Response;

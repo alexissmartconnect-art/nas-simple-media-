@@ -12,28 +12,30 @@
       <div class="brand-badge">▶</div>
       <span>NAS Simple Media — Partage</span>
     </div>
-    <div id="pwdBox" class="login-card hidden" style="margin:0 auto">
+    <form id="pwdBox" class="login-card hidden" style="margin:0 auto">
       <h1>Lien protégé</h1>
       <p>Ce partage est protégé par un mot de passe.</p>
       <div class="field">
         <label for="sharePwd">Mot de passe</label>
-        <input id="sharePwd" type="password" />
+        <input id="sharePwd" type="password" autocomplete="current-password" />
       </div>
       <p class="error hidden" id="pwdErr"></p>
-      <button class="btn btn-primary" id="pwdBtn" style="width:100%">Ouvrir</button>
-    </div>
+      <button class="btn btn-primary" id="pwdBtn" type="submit" style="width:100%">Ouvrir</button>
+    </form>
     <div id="playerBox" class="hidden">
       <h2 id="title" class="section-title"></h2>
       <p class="muted" id="meta"></p>
       <div class="player-toolbar" style="margin:0.75rem 0">
-        <div class="mode-toggle" id="modeToggle">
-          <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
-          <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
-        </div>
-        <div class="player-actions">
-          <a class="btn" id="btnDownload" href="#">Télécharger</a>
-          <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
-          <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
+        <div class="player-controls-row">
+          <div class="mode-toggle" id="modeToggle">
+            <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
+            <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
+          </div>
+          <div class="player-actions">
+            <a class="btn" id="btnDownload" href="#">Télécharger</a>
+            <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
+            <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
+          </div>
         </div>
         <p class="muted player-hint" id="playerHint"></p>
       </div>
@@ -44,6 +46,25 @@
     </div>
     <div id="errBox" class="empty hidden"></div>
   </div>
+
+  <div class="modal-backdrop hidden" id="vlcModal">
+    <div class="modal" style="width:min(520px,100%)">
+      <h2>Ouvrir dans VLC</h2>
+      <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / AC3 5.1 inclus). Le mode Compatible navigateur downmixe en AAC stéréo.</p>
+      <div class="field">
+        <label>URL flux réseau</label>
+        <input id="vlcUrl" type="text" readonly />
+      </div>
+      <p class="muted" style="font-size:0.85rem">VLC → Média → Ouvrir un flux réseau… (Ctrl+N) — collez l’URL.<br/>CLI : <code>vlc "&lt;url&gt;"</code></p>
+      <p class="ok hidden" id="vlcCopied">URL copiée dans le presse-papiers</p>
+      <div class="modal-actions">
+        <a class="btn" id="vlcM3uLink" href="#" download>Télécharger .m3u</a>
+        <button class="btn btn-primary" id="vlcCopy" type="button">Copier l’URL</button>
+        <button class="btn btn-ghost" id="vlcClose" type="button">Fermer</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
   <script>
     const token = location.pathname.split('/').pop();
@@ -113,7 +134,7 @@
         const r = await fetch(playlistUrl, { credentials: 'same-origin' });
         if (r.ok) {
           const t = await r.clone().text();
-          if (t.trim().startsWith('#EXTM3U')) break;
+          if (t.includes('#EXTM3U') && t.includes('#EXTINF:')) break;
         }
         await new Promise((x) => setTimeout(x, 1200));
         if (i === 39) {
@@ -139,6 +160,12 @@
       const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (password && !document.getElementById('pwdBox').classList.contains('hidden')) {
+          const pwdErr = document.getElementById('pwdErr');
+          pwdErr.textContent = data.error || 'Mot de passe incorrect';
+          pwdErr.classList.remove('hidden');
+          return;
+        }
         document.getElementById('pwdBox').classList.add('hidden');
         document.getElementById('playerBox').classList.add('hidden');
         const box = document.getElementById('errBox');
@@ -153,6 +180,7 @@
       }
       meta = data;
       document.getElementById('pwdBox').classList.add('hidden');
+      document.getElementById('errBox').classList.add('hidden');
       document.getElementById('playerBox').classList.remove('hidden');
       document.getElementById('title').textContent = data.title;
       const bits = [];
@@ -174,16 +202,11 @@
       else playDirect();
     }
 
-    document.getElementById('pwdBtn').addEventListener('click', () => {
+    document.getElementById('pwdBox').addEventListener('submit', (e) => {
+      e.preventDefault();
       password = document.getElementById('sharePwd').value;
       document.getElementById('pwdErr').classList.add('hidden');
-      load().then(() => {
-        if (!document.getElementById('playerBox').classList.contains('hidden')) return;
-        if (!document.getElementById('errBox').classList.contains('hidden')) {
-          document.getElementById('pwdErr').textContent = document.getElementById('errBox').textContent;
-          document.getElementById('pwdErr').classList.remove('hidden');
-        }
-      });
+      load();
     });
     document.getElementById('btnModeDirect').addEventListener('click', () => { setMode('direct'); playDirect(); });
     document.getElementById('btnModeCompat').addEventListener('click', () => { if (meta && meta.type !== 'track') { setMode('compatible'); playCompatible(); } });
@@ -191,8 +214,21 @@
       const res = await fetch('/api/public/vlc/' + encodeURIComponent(token) + pwQs());
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { alert(data.error || 'Erreur'); return; }
-      try { await navigator.clipboard.writeText(data.streamUrl); } catch {}
-      alert('URL VLC copiee:\n\n' + data.streamUrl + '\n\n' + (data.help || ''));
+      document.getElementById('vlcUrl').value = data.streamUrl;
+      document.getElementById('vlcM3uLink').href = data.m3uUrl;
+      document.getElementById('vlcCopied').classList.add('hidden');
+      document.getElementById('vlcModal').classList.remove('hidden');
+      try {
+        await navigator.clipboard.writeText(data.streamUrl);
+        document.getElementById('vlcCopied').classList.remove('hidden');
+      } catch {}
+    });
+    document.getElementById('vlcClose').addEventListener('click', () => document.getElementById('vlcModal').classList.add('hidden'));
+    document.getElementById('vlcCopy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById('vlcUrl').value);
+        document.getElementById('vlcCopied').classList.remove('hidden');
+      } catch {}
     });
     load();
   </script>

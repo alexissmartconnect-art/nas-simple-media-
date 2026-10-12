@@ -70,6 +70,13 @@ export function resolveStreamToken(
   return data;
 }
 
+/** Revoke all active stream tokens belonging to a user. */
+export function revokeUserStreamTokens(userId: number): void {
+  for (const [k, v] of tokens.entries()) {
+    if (v.userId === userId) tokens.delete(k);
+  }
+}
+
 export function buildRawStreamUrl(mediaId: number, token: string): string {
   return `${config.PUBLIC_BASE_URL}/api/stream/${mediaId}/raw?token=${encodeURIComponent(token)}`;
 }

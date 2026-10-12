@@ -4,6 +4,7 @@ import { config, type LibraryKind } from '../config';
 import { getDb, type LibraryRow } from '../db/schema';
 import { isMediaFile, parseMediaFile } from './heuristics';
 import { listAllLibraries, resolveLibraryPath } from '../libraries/libraries';
+import { invalidateTranscodeCache } from '../transcode/hls';
 
 export interface ScanResult {
   scanned: number;
@@ -14,7 +15,23 @@ export interface ScanResult {
   errors: string[];
 }
 
-function walkDir(dir: string, base: string, out: string[]): void {
+function walkDir(
+  dir: string,
+  base: string,
+  realBase: string,
+  out: string[],
+  visitedDirs: Set<string>
+): void {
+  let realDir: string;
+  try {
+    realDir = fs.realpathSync(dir);
+  } catch {
+    return;
+  }
+  if (visitedDirs.has(realDir)) return;
+  if (realDir !== realBase && !realDir.startsWith(realBase + path.sep)) return;
+  visitedDirs.add(realDir);
+
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -23,9 +40,14 @@ function walkDir(dir: string, base: string, out: string[]): void {
   }
   for (const ent of entries) {
     if (ent.name.startsWith('.')) continue;
+    // Synology NAS metadata folders (@eaDir, #recycle)
+    if (ent.name === '@eaDir' || ent.name === '#recycle') continue;
     const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) walkDir(full, base, out);
-    else if (ent.isFile() && isMediaFile(ent.name)) out.push(path.relative(base, full));
+    if (ent.isDirectory()) {
+      walkDir(full, base, realBase, out, visitedDirs);
+    } else if (ent.isFile() && isMediaFile(ent.name)) {
+      out.push(path.relative(base, full));
+    }
   }
 }
 
@@ -37,8 +59,16 @@ function scanOneLibrary(lib: LibraryRow, result: ScanResult): void {
     return;
   }
 
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    result.errors.push(`Bibliothèque "${lib.name}": chemin inaccessible (${root})`);
+    return;
+  }
+
   const files: string[] = [];
-  walkDir(root, root, files);
+  walkDir(root, root, realRoot, files, new Set<string>());
   const seen = new Set<string>();
   const kind = lib.type as LibraryKind;
 
@@ -113,9 +143,11 @@ function scanOneLibrary(lib: LibraryRow, result: ScanResult): void {
     };
 
     upsert.run(payload);
-    if (!existing) result.added++;
-    else if (existing.mtime !== payload.mtime || existing.size_bytes !== payload.size_bytes) {
+    if (!existing) {
+      result.added++;
+    } else if (existing.mtime !== payload.mtime || existing.size_bytes !== payload.size_bytes) {
       result.updated++;
+      invalidateTranscodeCache(existing.id);
     }
   }
 
@@ -126,6 +158,7 @@ function scanOneLibrary(lib: LibraryRow, result: ScanResult): void {
   for (const row of all) {
     if (!seen.has(row.rel_path)) {
       del.run(row.id);
+      invalidateTranscodeCache(row.id);
       result.removed++;
     }
   }

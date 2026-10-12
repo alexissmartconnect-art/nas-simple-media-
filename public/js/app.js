@@ -6,6 +6,9 @@
     library: null, // selected library object
     drill: null, // show name / artist
     currentItem: null,
+    visibleItems: [], // items currently displayed on screen
+    queue: [], // array of media ids in current play queue
+    queueIndex: -1,
     playMode: 'direct', // direct | compatible
     hls: null,
     q: '',
@@ -41,10 +44,15 @@
   }
 
   function fmtBytes(n) {
-    if (n < 1024) return n + ' B';
+    if (!n || n < 1024) return (n || 0) + ' B';
     if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
     if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
     return (n / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function extLabel(filename) {
+    const m = /\.([a-z0-9]+)$/i.exec(filename || '');
+    return m ? m[1].toUpperCase() : '';
   }
 
   function iconFor(typeOrKind) {
@@ -129,9 +137,9 @@
 
   async function renderBrowse() {
     if (!state.library) {
-      sectionTitle.textContent = 'Bibliothèques';
       await loadLibraries();
       if (!state.libraries.length) {
+        sectionTitle.textContent = 'Bibliothèques';
         content.innerHTML = emptyMsg(
           isAdmin()
             ? 'Aucune bibliothèque. Créez-en une dans Admin · Bibliothèques, puis Rescan.'
@@ -139,12 +147,33 @@
         );
         return;
       }
-      let libs = state.libraries;
+
       if (state.q) {
-        const qq = state.q.toLowerCase();
-        libs = libs.filter((l) => l.name.toLowerCase().includes(qq));
+        sectionTitle.textContent = `Recherche : « ${state.q} »`;
+        const data = await api(`/api/media?q=${encodeURIComponent(state.q)}&limit=200`);
+        state.visibleItems = data.items || [];
+        content.innerHTML =
+          crumb([
+            [
+              'Bibliothèques',
+              () => {
+                $('search').value = '';
+                state.q = '';
+                render();
+              },
+            ],
+            [`Résultats (${state.visibleItems.length})`],
+          ]) +
+          (state.visibleItems.length
+            ? listHtml(state.visibleItems, { showOrigin: true })
+            : emptyMsg(`Aucun média trouvé pour « ${state.q} »`));
+        bindListActions();
+        return;
       }
-      content.innerHTML = `<div class="grid">${libs
+
+      sectionTitle.textContent = 'Bibliothèques';
+      state.visibleItems = [];
+      content.innerHTML = `<div class="grid">${state.libraries
         .map(
           (l) => `<article class="card" data-lib="${l.id}">
           <div class="thumb">${iconFor(l.type)}</div>
@@ -172,9 +201,10 @@
       const data = await api(
         `/api/media?library_id=${lib.id}&limit=500` + (state.q ? '&q=' + encodeURIComponent(state.q) : '')
       );
+      state.visibleItems = data.items || [];
       content.innerHTML =
         crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
-        cardsHtml(data.items);
+        cardsHtml(state.visibleItems);
       bindCards();
       return;
     }
@@ -188,6 +218,7 @@
           const qq = state.q.toLowerCase();
           shows = shows.filter((s) => (s.name || '').toLowerCase().includes(qq));
         }
+        state.visibleItems = [];
         content.innerHTML =
           crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
           (shows.length
@@ -216,12 +247,13 @@
         `/api/media?library_id=${lib.id}&show=${encodeURIComponent(state.drill)}&limit=500` +
           (state.q ? '&q=' + encodeURIComponent(state.q) : '')
       );
+      state.visibleItems = data.items || [];
       content.innerHTML =
         crumb([
           ['Bibliothèques', () => { state.library = null; state.drill = null; render(); }],
           [lib.name, () => { state.drill = null; render(); }],
           [state.drill],
-        ]) + listHtml(data.items);
+        ]) + groupedSeriesHtml(state.visibleItems);
       bindListActions();
       return;
     }
@@ -235,6 +267,7 @@
         const qq = state.q.toLowerCase();
         artists = artists.filter((a) => (a.name || '').toLowerCase().includes(qq));
       }
+      state.visibleItems = [];
       content.innerHTML =
         crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
         (artists.length
@@ -263,17 +296,17 @@
       `/api/media?library_id=${lib.id}&artist=${encodeURIComponent(state.drill)}&limit=500` +
         (state.q ? '&q=' + encodeURIComponent(state.q) : '')
     );
+    state.visibleItems = data.items || [];
     content.innerHTML =
       crumb([
         ['Bibliothèques', () => { state.library = null; state.drill = null; render(); }],
         [lib.name, () => { state.drill = null; render(); }],
         [state.drill],
-      ]) + listHtml(data.items);
+      ]) + groupedMusicHtml(state.visibleItems);
     bindListActions();
   }
 
   function crumb(parts) {
-    // parts: [label] or [label, onClick]
     const html = parts
       .map((p, i) => {
         if (p[1]) {
@@ -294,39 +327,111 @@
   function cardsHtml(items) {
     if (!items.length) return emptyMsg('Aucun média dans cette bibliothèque.');
     return `<div class="grid">${items
-      .map(
-        (it) => `<article class="card" data-id="${it.id}">
-        <div class="thumb">${iconFor(it.type)}</div>
-        <div>
-          <div class="title">${escapeHtml(it.title)}</div>
-          <div class="meta">${fmtBytes(it.size_bytes)}</div>
-        </div>
-      </article>`
-      )
+      .map((it) => {
+        const ext = extLabel(it.filename);
+        const shareBtn = canShare()
+          ? `<button class="btn btn-sm btn-card-share" type="button" title="Partager">Partager</button>`
+          : '';
+        return `<article class="card" data-id="${it.id}">
+          <div class="thumb">
+            ${iconFor(it.type)}
+            ${ext ? `<span class="ext-badge">${escapeHtml(ext)}</span>` : ''}
+          </div>
+          <div>
+            <div class="title">${escapeHtml(it.title)}</div>
+            <div class="meta">${fmtBytes(it.size_bytes)}</div>
+            <div class="card-actions">
+              <button class="btn btn-sm btn-primary btn-card-play" type="button">Lire</button>
+              <button class="btn btn-sm btn-card-vlc" type="button" title="Ouvrir dans VLC">VLC</button>
+              <button class="btn btn-sm btn-card-dl" type="button" title="Télécharger">DL</button>
+              ${shareBtn}
+            </div>
+          </div>
+        </article>`;
+      })
       .join('')}</div>`;
   }
 
   function bindCards() {
     content.querySelectorAll('.card[data-id]').forEach((el) => {
-      el.addEventListener('click', () => playById(Number(el.getAttribute('data-id'))));
+      const id = Number(el.getAttribute('data-id'));
+      el.addEventListener('click', () => startQueueFromItem(id));
+      const play = el.querySelector('.btn-card-play');
+      if (play) play.addEventListener('click', (e) => { e.stopPropagation(); startQueueFromItem(id); });
+      const vlc = el.querySelector('.btn-card-vlc');
+      if (vlc) vlc.addEventListener('click', (e) => { e.stopPropagation(); openVlcModal(id); });
+      const dl = el.querySelector('.btn-card-dl');
+      if (dl) dl.addEventListener('click', (e) => { e.stopPropagation(); downloadMedia(id); });
+      const sh = el.querySelector('.btn-card-share');
+      if (sh) sh.addEventListener('click', (e) => { e.stopPropagation(); openShareModal(id); });
     });
   }
 
-  function listHtml(items) {
+  function groupedSeriesHtml(items) {
+    if (!items.length) return emptyMsg('Aucun épisode.');
+    const groups = new Map();
+    for (const it of items) {
+      const s = it.season != null ? Number(it.season) : 1;
+      if (!groups.has(s)) groups.set(s, []);
+      groups.get(s).push(it);
+    }
+    const playAllBtn =
+      items.length > 1
+        ? `<div class="toolbar"><button class="btn btn-primary" id="btnPlayAll" type="button">▶ Tout lire (${items.length} épisodes)</button></div>`
+        : '';
+    let html = playAllBtn;
+    for (const [season, eps] of groups.entries()) {
+      html += `<div class="group-header"><span>Saison ${season}</span><span class="muted">${eps.length} ép.</span></div>`;
+      html += listHtml(eps);
+    }
+    return html;
+  }
+
+  function groupedMusicHtml(items) {
+    if (!items.length) return emptyMsg('Aucune piste.');
+    const groups = new Map();
+    for (const it of items) {
+      const alb = it.album || 'Album inconnu';
+      if (!groups.has(alb)) groups.set(alb, []);
+      groups.get(alb).push(it);
+    }
+    const playAllBtn =
+      items.length > 1
+        ? `<div class="toolbar"><button class="btn btn-primary" id="btnPlayAll" type="button">▶ Tout lire (${items.length} pistes)</button></div>`
+        : '';
+    let html = playAllBtn;
+    for (const [album, tracks] of groups.entries()) {
+      html += `<div class="group-header"><span>💿 ${escapeHtml(album)}</span><span class="muted">${tracks.length} piste(s)</span></div>`;
+      html += listHtml(tracks);
+    }
+    return html;
+  }
+
+  function listHtml(items, opts = {}) {
     if (!items.length) return emptyMsg('Aucun élément.');
     return `<div class="list">${items
       .map((it) => {
-        let meta = fmtBytes(it.size_bytes);
+        const ext = extLabel(it.filename);
+        const parts = [];
+        if (opts.showOrigin) {
+          if (it.show_name) parts.push(it.show_name);
+          if (it.artist) parts.push(it.artist);
+        }
         if (it.type === 'episode') {
-          meta = `S${String(it.season).padStart(2, '0')}E${String(it.episode).padStart(2, '0')} · ${meta}`;
+          parts.push(`S${String(it.season ?? 1).padStart(2, '0')}E${String(it.episode ?? 1).padStart(2, '0')}`);
         }
         if (it.type === 'track') {
-          meta = `${it.album || ''}${it.track_num != null ? ' · #' + it.track_num : ''} · ${meta}`;
+          if (it.album) parts.push(it.album);
+          if (it.track_num != null) parts.push('#' + it.track_num);
         }
+        if (ext) parts.push(ext);
+        parts.push(fmtBytes(it.size_bytes));
+        const meta = parts.filter(Boolean).join(' · ');
         const shareBtn = canShare()
           ? `<button class="btn btn-share" type="button">Partager</button>`
           : '';
-        return `<div class="list-item" data-id="${it.id}">
+        const isPlaying = state.currentItem && state.currentItem.id === it.id;
+        return `<div class="list-item ${isPlaying ? 'playing' : ''}" data-id="${it.id}">
           <div class="left">
             <div class="title">${iconFor(it.type)} ${escapeHtml(it.title)}</div>
             <div class="meta">${escapeHtml(meta)}</div>
@@ -343,9 +448,13 @@
   }
 
   function bindListActions() {
+    const playAll = $('btnPlayAll');
+    if (playAll && state.visibleItems.length) {
+      playAll.addEventListener('click', () => startQueueFromItem(state.visibleItems[0].id));
+    }
     content.querySelectorAll('.list-item').forEach((row) => {
       const id = Number(row.getAttribute('data-id'));
-      row.querySelector('.btn-play').addEventListener('click', () => playById(id));
+      row.querySelector('.btn-play').addEventListener('click', () => startQueueFromItem(id));
       const dl = row.querySelector('.btn-dl');
       if (dl) dl.addEventListener('click', (e) => { e.stopPropagation(); downloadMedia(id); });
       const vlc = row.querySelector('.btn-vlc');
@@ -353,6 +462,47 @@
       const sh = row.querySelector('.btn-share');
       if (sh) sh.addEventListener('click', () => openShareModal(id));
     });
+  }
+
+  function startQueueFromItem(id) {
+    const ids = (state.visibleItems || []).map((x) => x.id);
+    const idx = ids.indexOf(id);
+    if (idx !== -1) {
+      state.queue = ids;
+      state.queueIndex = idx;
+    } else {
+      state.queue = [id];
+      state.queueIndex = 0;
+    }
+    playById(id);
+  }
+
+  function updateQueueButtons() {
+    const hasQueue = state.queue.length > 1;
+    const prev = $('btnPrev');
+    const next = $('btnNext');
+    prev.classList.toggle('hidden', !hasQueue);
+    next.classList.toggle('hidden', !hasQueue);
+    prev.disabled = state.queueIndex <= 0;
+    next.disabled = state.queueIndex < 0 || state.queueIndex >= state.queue.length - 1;
+    content.querySelectorAll('.list-item').forEach((row) => {
+      const rid = Number(row.getAttribute('data-id'));
+      row.classList.toggle('playing', Boolean(state.currentItem && state.currentItem.id === rid));
+    });
+  }
+
+  function playNextInQueue() {
+    if (state.queueIndex >= 0 && state.queueIndex < state.queue.length - 1) {
+      state.queueIndex += 1;
+      playById(state.queue[state.queueIndex]);
+    }
+  }
+
+  function playPrevInQueue() {
+    if (state.queueIndex > 0) {
+      state.queueIndex -= 1;
+      playById(state.queue[state.queueIndex]);
+    }
   }
 
   function destroyHls() {
@@ -372,12 +522,27 @@
   function updatePlayerChrome(item) {
     const isVideo = item.type !== 'track';
     $('modeToggle').classList.toggle('hidden', !isVideo);
+    const subParts = [];
+    if (item.show_name) {
+      subParts.push(
+        `${item.show_name} · S${String(item.season ?? 1).padStart(2, '0')}E${String(item.episode ?? 1).padStart(2, '0')}`
+      );
+    }
+    if (item.artist) {
+      subParts.push(item.artist + (item.album ? ` — ${item.album}` : ''));
+    }
+    if (state.queue.length > 1 && state.queueIndex >= 0) {
+      subParts.push(`${state.queueIndex + 1}/${state.queue.length}`);
+    }
+    $('nowPlayingSub').textContent = subParts.join(' · ');
+
     const hint = item.playback?.reason || '';
     const extra = isVideo
       ? ' Direct = fichier original. Compatible = ffmpeg H.264+AAC stéréo (pas de DTS dans le navigateur). VLC pour le Remux / 5.1.'
       : ' Téléchargez ou ouvrez dans VLC pour tous les codecs audio.';
     $('playerHint').textContent = hint + extra;
     $('btnM3u').href = '/api/media/' + item.id + '/playlist.m3u';
+    updateQueueButtons();
   }
 
   async function playDirect(item) {
@@ -431,15 +596,11 @@
 
     async function waitPlaylist(retries) {
       for (let i = 0; i < retries; i++) {
+        if (!state.currentItem || state.currentItem.id !== item.id) return false;
         const res = await fetch(playlistUrl, { credentials: 'same-origin' });
         if (res.ok) {
-          const ct = res.headers.get('content-type') || '';
-          if (ct.includes('mpegurl') || ct.includes('application/vnd.apple.mpegurl') || ct.includes('audio/mpegurl')) {
-            return true;
-          }
-          // might be JSON 202 served as ok? check
           const text = await res.text();
-          if (text.trim().startsWith('#EXTM3U')) return true;
+          if (text.includes('#EXTM3U') && text.includes('#EXTINF:')) return true;
         }
         if (res.status === 202) {
           await new Promise((r) => setTimeout(r, 1500));
@@ -452,7 +613,9 @@
 
     const ready = await waitPlaylist(40);
     if (!ready) {
-      $('playerHint').textContent = 'Transcodage trop long / échec. Préférez VLC en LAN pour les gros Remux.';
+      if (state.currentItem && state.currentItem.id === item.id) {
+        $('playerHint').textContent = 'Transcodage trop long / échec. Préférez VLC en LAN pour les gros Remux.';
+      }
       return;
     }
 
@@ -594,6 +757,7 @@
               const libNames = (u.library_ids || [])
                 .map((id) => state.allLibsAdmin.find((l) => l.id === id)?.name || id)
                 .join(', ');
+              const canDelete = state.user && state.user.id !== u.id;
               return `<tr>
               <td><strong>${escapeHtml(u.username)}</strong><div class="muted" style="font-size:0.78rem">#${u.id}</div></td>
               <td><span class="badge">${escapeHtml(u.role)}</span></td>
@@ -602,7 +766,14 @@
                 ${u.can_share ? '<span class="badge">partage</span>' : ''}
               </td>
               <td class="muted">${u.role === 'admin' ? 'toutes' : escapeHtml(libNames || '—')}</td>
-              <td><button class="btn" data-edit-user="${u.id}" type="button">Modifier</button></td>
+              <td style="display:flex;gap:0.35rem;flex-wrap:wrap">
+                <button class="btn" data-edit-user="${u.id}" type="button">Modifier</button>
+                ${
+                  canDelete
+                    ? `<button class="btn btn-danger" data-del-user="${u.id}" type="button">Suppr.</button>`
+                    : ''
+                }
+              </td>
             </tr>`;
             })
             .join('')}
@@ -613,6 +784,18 @@
       btn.addEventListener('click', () => {
         const u = users.find((x) => x.id === Number(btn.getAttribute('data-edit-user')));
         openUserModal(u);
+      });
+    });
+    content.querySelectorAll('[data-del-user]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const u = users.find((x) => x.id === Number(btn.getAttribute('data-del-user')));
+        if (!u || !confirm(`Supprimer le compte "${u.username}" ?`)) return;
+        try {
+          await api('/api/admin/users/' + u.id, { method: 'DELETE' });
+          renderAdminUsers();
+        } catch (e) {
+          alert(e.message);
+        }
       });
     });
   }
@@ -629,12 +812,12 @@
     $('uEnabled').closest('.field').classList.toggle('hidden', !user);
     $('userError').classList.add('hidden');
     $('uLibs').innerHTML = state.allLibsAdmin
-      .map(
-        (l) =>
-          `<label><input type="checkbox" value="${l.id}" ${
-            user && (user.library_ids || []).includes(l.id) ? 'checked' : ''
-          }/> ${escapeHtml(l.name)} <span class="muted">(${l.type})</span></label>`
-      )
+      .map((l) => {
+        const checked = user ? (user.library_ids || []).includes(l.id) : !!l.enabled;
+        return `<label><input type="checkbox" value="${l.id}" ${checked ? 'checked' : ''}/> ${escapeHtml(
+          l.name
+        )} <span class="muted">(${l.type})</span></label>`;
+      })
       .join('');
     $('userModal').classList.remove('hidden');
   }
@@ -689,6 +872,7 @@
       btn.addEventListener('click', async () => {
         if (!confirm('Supprimer cette bibliothèque et ses médias indexés ?')) return;
         await api('/api/admin/libraries/' + btn.getAttribute('data-del-lib'), { method: 'DELETE' });
+        refreshStats();
         renderAdminLibs();
       });
     });
@@ -744,14 +928,50 @@
     location.href = '/login.html';
   });
 
+  $('btnChangePwd').addEventListener('click', () => {
+    $('curPwd').value = '';
+    $('newPwd').value = '';
+    $('pwdModalError').classList.add('hidden');
+    $('pwdModalOk').classList.add('hidden');
+    $('pwdModal').classList.remove('hidden');
+  });
+  $('pwdModalCancel').addEventListener('click', () => $('pwdModal').classList.add('hidden'));
+  $('pwdModalSave').addEventListener('click', async () => {
+    $('pwdModalError').classList.add('hidden');
+    $('pwdModalOk').classList.add('hidden');
+    try {
+      await api('/api/me/password', {
+        method: 'POST',
+        body: JSON.stringify({
+          currentPassword: $('curPwd').value,
+          newPassword: $('newPwd').value,
+        }),
+      });
+      $('pwdModalOk').textContent = 'Mot de passe mis à jour !';
+      $('pwdModalOk').classList.remove('hidden');
+      $('curPwd').value = '';
+      $('newPwd').value = '';
+    } catch (e) {
+      $('pwdModalError').textContent = e.message;
+      $('pwdModalError').classList.remove('hidden');
+    }
+  });
+
   $('btnClosePlayer').addEventListener('click', () => {
     $('playerPanel').classList.add('hidden');
     destroyHls();
+    state.currentItem = null;
     $('videoPlayer').pause();
     $('videoPlayer').removeAttribute('src');
     $('audioPlayer').pause();
     $('audioPlayer').removeAttribute('src');
+    updateQueueButtons();
   });
+
+  $('btnPrev').addEventListener('click', playPrevInQueue);
+  $('btnNext').addEventListener('click', playNextInQueue);
+  $('videoPlayer').addEventListener('ended', playNextInQueue);
+  $('audioPlayer').addEventListener('ended', playNextInQueue);
 
   $('btnShareCurrent').addEventListener('click', () => {
     if (state.currentItem) openShareModal(state.currentItem.id);
@@ -781,21 +1001,39 @@
     } catch {}
   });
 
+  document.querySelectorAll('[data-exp-hours]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const hours = Number(btn.getAttribute('data-exp-hours'));
+      if (!hours) {
+        $('shareExpires').value = '';
+        return;
+      }
+      const d = new Date(Date.now() + hours * 3600 * 1000);
+      const pad = (n) => String(n).padStart(2, '0');
+      const localIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+        d.getHours()
+      )}:${pad(d.getMinutes())}`;
+      $('shareExpires').value = localIso;
+    });
+  });
+
   $('shareCancel').addEventListener('click', () => $('shareModal').classList.add('hidden'));
   $('shareCreate').addEventListener('click', async () => {
     $('shareError').classList.add('hidden');
     try {
+      const rawExp = $('shareExpires').value.trim();
+      const expiresAt = rawExp ? new Date(rawExp).toISOString() : null;
       const share = await api('/api/shares', {
         method: 'POST',
         body: JSON.stringify({
           mediaId: shareMediaId,
-          expiresAt: $('shareExpires').value.trim() || null,
+          expiresAt,
           maxUses: $('shareMaxUses').value ? Number($('shareMaxUses').value) : null,
           password: $('sharePassword').value || null,
         }),
       });
       const el = $('shareResult');
-      el.textContent = 'Lien: ' + share.url;
+      el.textContent = 'Lien copié : ' + share.url;
       el.classList.remove('hidden');
       try {
         await navigator.clipboard.writeText(share.url);
@@ -864,6 +1102,7 @@
         });
       }
       $('libModal').classList.add('hidden');
+      refreshStats();
       renderAdminLibs();
     } catch (e) {
       $('libError').textContent = e.message;

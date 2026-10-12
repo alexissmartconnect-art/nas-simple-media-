@@ -1,6 +1,7 @@
 import { getDb, type UserRow, type SessionUser } from '../db/schema';
 import { hashPassword, verifyPassword } from '../auth/passwords';
-import { destroyUserSessions } from '../auth/session';
+import { destroyUserSessions, updateUserSessions } from '../auth/session';
+import { revokeUserStreamTokens } from '../auth/streamTokens';
 
 export function publicUser(u: UserRow) {
   return {
@@ -73,6 +74,10 @@ export function updateUser(
   const u = getUser(id);
   if (!u) throw new Error('Utilisateur introuvable');
 
+  if (patch.password !== undefined && patch.password !== '' && patch.password.length < 4) {
+    throw new Error('Mot de passe trop court (min 4)');
+  }
+
   if (patch.enabled === false && u.role === 'admin') {
     const admins = (
       db.prepare(`SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND enabled = 1`).get() as {
@@ -107,8 +112,58 @@ export function updateUser(
     id
   );
 
-  if (patch.password || patch.enabled === false) destroyUserSessions(id);
-  return publicUser(getUser(id)!);
+  const updated = publicUser(getUser(id)!);
+  if (patch.password || patch.enabled === false) {
+    destroyUserSessions(id);
+    revokeUserStreamTokens(id);
+  } else {
+    updateUserSessions({
+      id: updated.id,
+      username: updated.username,
+      role: updated.role,
+      can_share: updated.can_share,
+    });
+  }
+  return updated;
+}
+
+export function deleteUser(id: number, actorId?: number): boolean {
+  const db = getDb();
+  const u = getUser(id);
+  if (!u) return false;
+  if (actorId !== undefined && actorId === id) {
+    throw new Error('Impossible de supprimer votre propre compte');
+  }
+  if (u.role === 'admin' && u.enabled) {
+    const admins = (
+      db.prepare(`SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND enabled = 1`).get() as {
+        c: number;
+      }
+    ).c;
+    if (admins <= 1) throw new Error('Impossible de supprimer le dernier admin');
+  }
+  destroyUserSessions(id);
+  revokeUserStreamTokens(id);
+  const r = db.prepare(`DELETE FROM users WHERE id = ?`).run(id);
+  return r.changes > 0;
+}
+
+export function changeOwnPassword(
+  userId: number,
+  currentPassword: string,
+  newPassword: string
+): void {
+  const u = getUser(userId);
+  if (!u || !u.enabled) throw new Error('Utilisateur introuvable');
+  if (!verifyPassword(currentPassword, u.password_hash)) {
+    throw new Error('Mot de passe actuel incorrect');
+  }
+  if (!newPassword || newPassword.length < 4) {
+    throw new Error('Nouveau mot de passe trop court (min 4)');
+  }
+  getDb()
+    .prepare(`UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(hashPassword(newPassword), userId);
 }
 
 export function setUserLibraries(userId: number, libraryIds: number[]): void {

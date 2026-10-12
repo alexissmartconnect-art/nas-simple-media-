@@ -3,14 +3,49 @@ import path from 'path';
 import type { Request, Response } from 'express';
 import mime from 'mime-types';
 import { config } from '../config';
+import { listAllLibraries, resolveLibraryPath } from '../libraries/libraries';
 
-export function streamFile(absPath: string, req: Request, res: Response, opts?: { download?: boolean; filename?: string }): void {
-  if (!fs.existsSync(absPath)) {
+function pipeFileSafe(
+  absPath: string,
+  res: Response,
+  rangeOpts?: { start: number; end: number }
+): void {
+  const stream = fs.createReadStream(absPath, rangeOpts);
+  const cleanup = () => {
+    if (!stream.destroyed) {
+      stream.destroy();
+    }
+  };
+  res.on('close', cleanup);
+  stream.on('error', () => {
+    cleanup();
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Stream read error' });
+    } else {
+      res.end();
+    }
+  });
+  stream.pipe(res);
+}
+
+export function streamFile(
+  absPath: string,
+  req: Request,
+  res: Response,
+  opts?: { download?: boolean; filename?: string }
+): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(absPath);
+  } catch {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+  if (!stat.isFile()) {
     res.status(404).json({ error: 'File not found' });
     return;
   }
 
-  const stat = fs.statSync(absPath);
   const size = stat.size;
   const contentType = opts?.download
     ? 'application/octet-stream'
@@ -22,24 +57,45 @@ export function streamFile(absPath: string, req: Request, res: Response, opts?: 
   res.setHeader('Content-Type', contentType);
   res.setHeader('Cache-Control', 'private, max-age=3600');
   if (opts?.download) {
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`
+    );
   }
 
   if (!range) {
     res.setHeader('Content-Length', size);
     res.status(200);
-    fs.createReadStream(absPath).pipe(res);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    pipeFileSafe(absPath, res);
     return;
   }
 
   const m = /^bytes=(\d*)-(\d*)$/.exec(range);
-  if (!m) {
+  if (!m || (!m[1] && !m[2])) {
     res.status(416).setHeader('Content-Range', `bytes */${size}`).end();
     return;
   }
 
-  let start = m[1] ? parseInt(m[1], 10) : 0;
-  let end = m[2] ? parseInt(m[2], 10) : size - 1;
+  let start: number;
+  let end: number;
+  if (!m[1] && m[2]) {
+    // Suffix byte-range-spec: bytes=-500 (last 500 bytes)
+    const suffixLength = parseInt(m[2], 10);
+    if (Number.isNaN(suffixLength) || suffixLength <= 0 || size === 0) {
+      res.status(416).setHeader('Content-Range', `bytes */${size}`).end();
+      return;
+    }
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = parseInt(m[1], 10);
+    end = m[2] ? parseInt(m[2], 10) : size - 1;
+  }
+
   if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
     res.status(416).setHeader('Content-Range', `bytes */${size}`).end();
     return;
@@ -50,14 +106,59 @@ export function streamFile(absPath: string, req: Request, res: Response, opts?: 
   res.status(206);
   res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
   res.setHeader('Content-Length', chunkSize);
-  fs.createReadStream(absPath, { start, end }).pipe(res);
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  pipeFileSafe(absPath, res, { start, end });
 }
 
-/** Ensure absolute file path is under MEDIA_PATH or an absolute library path we already stored. */
+function isUnderRoot(target: string, root: string): boolean {
+  return target === root || target.startsWith(root + path.sep);
+}
+
+/** Ensure absolute file path is under MEDIA_PATH or an enabled library path, and never in DATA_PATH. */
 export function isPathAllowed(absPath: string): boolean {
+  if (!absPath || !path.isAbsolute(absPath)) return false;
   const resolved = path.resolve(absPath);
+  const dataRoot = path.resolve(config.DATA_PATH);
+  if (isUnderRoot(resolved, dataRoot)) return false;
+
+  let real = resolved;
+  try {
+    if (fs.existsSync(resolved)) {
+      real = fs.realpathSync(resolved);
+    }
+  } catch {
+    return false;
+  }
+  if (isUnderRoot(real, dataRoot)) return false;
+
   const mediaRoot = path.resolve(config.MEDIA_PATH);
-  if (resolved.startsWith(mediaRoot + path.sep) || resolved === mediaRoot) return true;
-  // Absolute library paths outside MEDIA_PATH are allowed if the file exists and was indexed
-  return path.isAbsolute(resolved) && fs.existsSync(resolved);
+  let realMediaRoot = mediaRoot;
+  try {
+    if (fs.existsSync(mediaRoot)) realMediaRoot = fs.realpathSync(mediaRoot);
+  } catch {}
+
+  if (isUnderRoot(resolved, mediaRoot) && isUnderRoot(real, realMediaRoot)) {
+    return true;
+  }
+
+  try {
+    const libs = listAllLibraries().filter((l) => l.enabled);
+    for (const lib of libs) {
+      const libRoot = resolveLibraryPath(lib.path);
+      let realLibRoot = libRoot;
+      try {
+        if (fs.existsSync(libRoot)) realLibRoot = fs.realpathSync(libRoot);
+      } catch {}
+      if (isUnderRoot(resolved, libRoot) && isUnderRoot(real, realLibRoot)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
 }

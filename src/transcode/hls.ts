@@ -29,6 +29,16 @@ function playlistPath(mediaId: number): string {
   return path.join(outDirFor(mediaId), 'playlist.m3u8');
 }
 
+export function isPlaylistPlayable(filePath: string): boolean {
+  try {
+    if (!fs.existsSync(filePath)) return false;
+    const content = fs.readFileSync(filePath, 'utf8');
+    return content.includes('#EXTM3U') && content.includes('#EXTINF:');
+  } catch {
+    return false;
+  }
+}
+
 export function isTranscodeEnabled(): boolean {
   return config.TRANSCODE_ENABLED;
 }
@@ -42,20 +52,27 @@ export function getJobStatus(mediaId: number): {
   if (!config.TRANSCODE_ENABLED) {
     return { status: 'idle', ready: false, enabled: false, error: 'Transcodage désactivé' };
   }
+  const pl = playlistPath(mediaId);
   const job = jobs.get(mediaId);
   if (!job) {
-    const pl = playlistPath(mediaId);
-    if (fs.existsSync(pl)) {
+    if (isPlaylistPlayable(pl)) {
       return { status: 'ready', ready: true, enabled: true };
     }
     return { status: 'idle', ready: false, enabled: true };
   }
   job.lastAccess = Date.now();
-  return { status: job.status, ready: job.ready || fs.existsSync(playlistPath(mediaId)), error: job.error, enabled: true };
+  const ready = job.ready || isPlaylistPlayable(pl);
+  if (ready) job.ready = true;
+  return {
+    status: job.status,
+    ready,
+    error: job.error,
+    enabled: true,
+  };
 }
 
 function markReadyIfPlaylist(job: Job): void {
-  if (fs.existsSync(path.join(job.outDir, 'playlist.m3u8'))) {
+  if (isPlaylistPlayable(path.join(job.outDir, 'playlist.m3u8'))) {
     job.ready = true;
     if (job.status === 'starting' || job.status === 'running') {
       job.status = 'ready';
@@ -139,6 +156,7 @@ function startFfmpeg(job: Job): void {
       job.status = 'ready';
     }
   }, 500);
+  readyPoll.unref?.();
 
   job.proc.on('error', (err) => {
     clearInterval(readyPoll);
@@ -178,7 +196,10 @@ function pumpQueue(): void {
 }
 
 /** Ensure a transcode job is running / queued for this media. */
-export function ensureTranscode(mediaId: number, inputPath: string): {
+export function ensureTranscode(
+  mediaId: number,
+  inputPath: string
+): {
   status: TranscodeJobStatus;
   ready: boolean;
   error?: string;
@@ -188,6 +209,11 @@ export function ensureTranscode(mediaId: number, inputPath: string): {
   }
 
   let job = jobs.get(mediaId);
+  if (job && job.inputPath !== inputPath) {
+    invalidateTranscodeCache(mediaId);
+    job = undefined;
+  }
+
   if (!job) {
     job = {
       mediaId,
@@ -202,10 +228,9 @@ export function ensureTranscode(mediaId: number, inputPath: string): {
     jobs.set(mediaId, job);
   } else {
     job.lastAccess = Date.now();
-    job.inputPath = inputPath;
   }
 
-  if (fs.existsSync(playlistPath(mediaId)) && (job.status === 'done' || job.status === 'ready')) {
+  if (isPlaylistPlayable(playlistPath(mediaId)) && (job.status === 'done' || job.status === 'ready')) {
     job.ready = true;
     return { status: job.status, ready: true };
   }
@@ -234,7 +259,7 @@ export function ensureTranscode(mediaId: number, inputPath: string): {
 
 export function getPlaylistFile(mediaId: number): string | null {
   const p = playlistPath(mediaId);
-  return fs.existsSync(p) ? p : null;
+  return isPlaylistPlayable(p) ? p : null;
 }
 
 export function getSegmentFile(mediaId: number, name: string): string | null {
@@ -247,18 +272,50 @@ export function getSegmentFile(mediaId: number, name: string): string | null {
   return fs.existsSync(resolved) ? resolved : null;
 }
 
-/** Rewrite playlist paths to absolute API URLs if needed — segments are relative, served from same dir. */
-export function readPlaylist(mediaId: number): string | null {
+/** Append query string (e.g. `token=...` or `password=...`) to segment lines in an HLS playlist. */
+export function formatPlaylistWithQuery(body: string, queryParam?: string): string {
+  if (!queryParam) return body;
+  const cleanQuery = queryParam.replace(/^[?&]/, '');
+  if (!cleanQuery) return body;
+  return body
+    .split('\n')
+    .map((line) => {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) return line;
+      const sep = t.includes('?') ? '&' : '?';
+      return `${t}${sep}${cleanQuery}`;
+    })
+    .join('\n');
+}
+
+/** Read playlist content once at least one segment is playable. */
+export function readPlaylist(mediaId: number, queryParam?: string): string | null {
   const p = getPlaylistFile(mediaId);
   if (!p) return null;
   const job = jobs.get(mediaId);
   if (job) job.lastAccess = Date.now();
-  return fs.readFileSync(p, 'utf8');
+  const raw = fs.readFileSync(p, 'utf8');
+  return formatPlaylistWithQuery(raw, queryParam);
 }
 
 export function touchJob(mediaId: number): void {
   const job = jobs.get(mediaId);
   if (job) job.lastAccess = Date.now();
+}
+
+export function invalidateTranscodeCache(mediaId: number): void {
+  const job = jobs.get(mediaId);
+  if (job?.proc) {
+    try {
+      job.proc.kill('SIGTERM');
+    } catch {}
+  }
+  jobs.delete(mediaId);
+  const idx = waitQueue.indexOf(mediaId);
+  if (idx !== -1) waitQueue.splice(idx, 1);
+  try {
+    fs.rmSync(outDirFor(mediaId), { recursive: true, force: true });
+  } catch {}
 }
 
 /** Remove stale cache dirs older than TTL. */
@@ -284,11 +341,6 @@ export function cleanTranscodeCache(): number {
     if (now - last < config.TRANSCODE_CACHE_TTL_MS) continue;
 
     try {
-      if (job?.proc) {
-        try {
-          job.proc.kill('SIGTERM');
-        } catch {}
-      }
       fs.rmSync(dir, { recursive: true, force: true });
       if (Number.isFinite(id)) jobs.delete(id);
       removed++;
@@ -307,6 +359,19 @@ export function startCacheCleaner(): void {
   };
   tick();
   setInterval(tick, 15 * 60 * 1000).unref?.();
+}
+
+export function stopAllTranscodeJobs(): void {
+  for (const job of jobs.values()) {
+    if (job.proc) {
+      try {
+        job.proc.kill('SIGTERM');
+      } catch {}
+    }
+  }
+  jobs.clear();
+  waitQueue.length = 0;
+  activeCount = 0;
 }
 
 /** Test helpers */
