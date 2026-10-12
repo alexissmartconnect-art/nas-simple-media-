@@ -1,14 +1,14 @@
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { config, type LibraryKind } from '../config';
 import { hashPassword } from '../auth/passwords';
+import { openDatabase, type SqliteDatabase } from './sqlite';
 
-let db: Database.Database | null = null;
+let db: SqliteDatabase | null = null;
 
-export function getDb(): Database.Database {
+export function getDb(): SqliteDatabase {
   if (db) return db;
-  db = new Database(config.DB_PATH);
+  db = openDatabase(config.DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   initSchema(db);
@@ -16,7 +16,7 @@ export function getDb(): Database.Database {
   return db;
 }
 
-function initSchema(database: Database.Database): void {
+function initSchema(database: SqliteDatabase): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +112,7 @@ function initSchema(database: Database.Database): void {
   migrateSharesTableIfNeeded(database);
 }
 
-function migrateSharesTableIfNeeded(database: Database.Database): void {
+function migrateSharesTableIfNeeded(database: SqliteDatabase): void {
   const cols = database.prepare(`PRAGMA table_info(shares)`).all() as Array<{ name: string }>;
   if (!cols.length) return;
   if (cols.some((c) => c.name === 'target_type')) return;
@@ -160,7 +160,7 @@ function migrateSharesTableIfNeeded(database: Database.Database): void {
   database.pragma('foreign_keys = ON');
 }
 
-function seedDefaults(database: Database.Database): void {
+function seedDefaults(database: SqliteDatabase): void {
   const admin = database.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).get();
   if (!admin) {
     database

@@ -12,10 +12,11 @@
 4. [Comptes & bibliothèques](#comptes--bibliothèques)
 5. [Organisation des dossiers](#organisation-des-dossiers)
 6. [Installation Synology (Container Manager)](#installation-synology-container-manager)
-7. [Accès distant (Bouygues / CGNAT)](#accès-distant-bouygues--cgnat)
-8. [Variables d'environnement](#variables-denvironnement)
-9. [Développement local](#développement-local)
-10. [Limites](#limites)
+7. [Installation native Synology (paquet SPK, DSM 7)](#installation-native-synology-paquet-spk-dsm-7)
+8. [Accès distant (Bouygues / CGNAT)](#accès-distant-bouygues--cgnat)
+9. [Variables d'environnement](#variables-denvironnement)
+10. [Développement local](#développement-local)
+11. [Limites](#limites)
 
 ---
 
@@ -118,6 +119,99 @@ sudo docker compose up -d --build
 6. **Admin · Bibliothèques** → Rescan ; **Admin · Comptes** → grants.
 
 L’image Docker installe **ffmpeg**. Pare-feu DSM : **8096/TCP** en LAN. Pour Internet : Tailscale ou Cloudflare Tunnel.
+
+---
+
+## Installation native Synology (paquet SPK, DSM 7)
+
+Paquet natif ciblant la **DS220+** (arch `geminilake`, DSM 7.x), sans Docker.
+
+### 1. Autoriser les éditeurs tiers
+
+**Centre de paquets → Paramètres → Général → Niveau de confiance → *Tous les éditeurs***.
+
+Sans ce réglage, DSM refuse d’installer un paquet non signé par Synology.
+
+### 2. Installer les dépendances
+
+| Paquet | Source | Pourquoi |
+|---|---|---|
+| **Node.js v22** | Synology (DSM **7.2** minimum) | Moteur JavaScript. `node:sqlite` est intégré à Node ≥ 22.5 : **aucun module natif à compiler**. |
+| **ffmpeg6** | [SynoCommunity](https://packages.synocommunity.com) | Transcodage « Compatible » (HLS H.264 + AAC stéréo). |
+
+```bash
+# Dépôt SynoCommunity (pour ffmpeg6) :
+#   Centre de paquets → Paramètres → Sources de paquets → Ajouter
+#   Nom      : SynoCommunity
+#   Emplacement : https://packages.synocommunity.com
+```
+
+> **Note sur `nodejs20`** — le paquet SPK déclare `Node.js_v22` et non `nodejs20`.
+> `nodejs20` n’existe pas chez SynoCommunity (qui ne publie aucun paquet Node) :
+> Node.js est fourni **par Synology**, sous les noms `Node.js_v20` et `Node.js_v22`,
+> disponibles à partir de DSM 7.2. La version 22 est requise parce que c’est elle
+> qui embarque le moteur SQLite intégré — c’est ce qui rend le paquet installable
+> sur une DSM dont la glibc (2.26) est trop ancienne pour les binaires natifs
+> précompilés de `better-sqlite3`.
+
+### 3. Installer le paquet
+
+**Centre de paquets → Installation manuelle →** sélectionner
+`nas-simple-media-1.2.0-geminilake.spk`.
+
+Le service démarre automatiquement sur le port **8096**.
+
+### 4. Donner l’accès aux médias (ACL) — *étape obligatoire*
+
+Le service tourne sous l’utilisateur dédié **`sc-nas-simple-media`** (jamais root).
+
+**Panneau de configuration → Dossier partagé → Modifier → Autorisations**
+→ accordez **lecture** (et parcours) sur `sc-nas-simple-media` pour vos dossiers de médias.
+
+> Sans cette ACL, le scanner ne voit aucun fichier. C’est le seul réglage manuel requis.
+
+### 5. Ouvrir l’interface
+
+`http://IP-DU-NAS:8096` → identifiant **`admin`**, mot de passe = `ADMIN_PASSWORD`
+(valeur par défaut `changeme`, à changer dans
+`/var/packages/nas-simple-media/etc/nas-simple-media.env`).
+
+### Chemins utiles
+
+| Chemin | Contenu |
+|---|---|
+| `/var/packages/nas-simple-media/target/app/` | Application (Node.js + `node_modules`) |
+| `/var/packages/nas-simple-media/etc/nas-simple-media.env` | Configuration |
+| `/var/packages/nas-simple-media/var/` | Base SQLite, métadonnées de partage, cache HLS |
+| `/var/packages/nas-simple-media/var/nas-simple-media.log` | Journal du service |
+| `/var/packages/nas-simple-media/scripts/start-stop-status` | Contrôle manuel du service |
+
+```bash
+# Redémarrer / arrêter / état
+sudo /var/packages/nas-simple-media/scripts/start-stop-status restart
+sudo /var/packages/nas-simple-media/scripts/start-stop-status stop
+sudo /var/packages/nas-simple-media/scripts/start-stop-status status
+```
+
+### Variables d’environnement du paquet
+
+Identiques à la section [Variables d’environnement](#variables-denvironnement), plus :
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `NAS_SM_SQLITE_BACKEND` | *(vide)* | Force le moteur SQLite : `node:sqlite` ou `better-sqlite3`. Laisser vide pour l’auto-détection. Utile pour diagnostiquer une installation. |
+
+### Construire le paquet soi-même
+
+```bash
+npm ci
+npm test          # 66 tests
+npm run build
+npm run spk       # -> dist-spk/nas-simple-media-1.2.0-geminilake.spk
+```
+
+Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié sur
+[GitHub Releases](https://github.com/alexissmartconnect-art/nas-simple-media-/releases).
 
 ---
 

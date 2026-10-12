@@ -1,0 +1,70 @@
+#!/bin/sh
+# postinst — runs as root after the package files are unpacked.
+#
+# Creates the runtime layout, generates the env file, and smoke-tests the app.
+
+. "$(dirname "$0")/common.sh"
+
+log "installing ${PKGNAME}"
+
+ensure_dirs
+
+# --- runtime configuration ---------------------------------------------------
+write_env_file
+
+# --- ownership ---------------------------------------------------------------
+# Files under target/ are chowned to the package user by the DSM privilege
+# framework; make sure the writable dirs match so the service can write its
+# database, cache and log.
+chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${APPDIR}" 2>/dev/null || true
+chown_to_service
+
+# --- smoke test --------------------------------------------------------------
+# Uses a throwaway in-memory database so nothing touches the real data dir.
+NODE_BIN="$(find_node)" || warn "no Node.js runtime found; install 'Node.js v22' before starting."
+if [ -n "${NODE_BIN}" ]; then
+  if node_is_supported "${NODE_BIN}"; then
+    log "verifying SQLite engine with Node.js $(node_version "${NODE_BIN}")"
+    _smoke="${TMP_DIR}/sqlite-smoke.js"
+    cat > "${_smoke}" <<'EOF'
+const { openDatabase, activeBackend } = require('./dist/db/sqlite');
+const db = openDatabase(':memory:');
+db.exec('CREATE TABLE t(a INTEGER)');
+db.prepare('INSERT INTO t VALUES (?)').run(1);
+const row = db.prepare('SELECT a FROM t').get();
+db.close();
+if (!row || row.a !== 1) { throw new Error('sqlite round-trip failed'); }
+process.stdout.write(activeBackend() + '\n');
+EOF
+    if _out="$(su -s /bin/sh "${SERVICE_USER}" -c "cd ${APPDIR} && ${NODE_BIN} ${_smoke}" 2>&1)"; then
+      log "SQLite engine OK (backend: ${_out})"
+    else
+      warn "SQLite smoke test failed: ${_out}"
+    fi
+    rm -f "${_smoke}"
+  else
+    warn "Node.js $(node_version "${NODE_BIN}") is too old; install 'Node.js v22' (>= ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR})."
+  fi
+fi
+
+# --- guidance ----------------------------------------------------------------
+log "data directory : ${VAR_DIR}"
+log "configuration  : ${ENVFILE}"
+log "web interface  : http://<nas-ip>:${APP_PORT}/  (admin / ADMIN_PASSWORD)"
+
+cat <<EOF
+
+-------------------------------------------------------------------------------
+ nas-simple-media — one manual step is required before the service can read
+ your media:
+
+   Control Panel > Shared Folder > Edit > Permissions
+     -> give the user "${SERVICE_USER}" read access to your media folders.
+
+ Without that ACL the scanner sees nothing.
+-------------------------------------------------------------------------------
+
+EOF
+
+log "installation complete"
+exit 0

@@ -6,3 +6,9 @@ media/
 *.log
 .DS_Store
 coverage/
+
+# Synology DSM 7 package build artefacts — published as GitHub Release assets only
+*.spk
+dist-spk/
+synology/package/
+.spk-deps-*/

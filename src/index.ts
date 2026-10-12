@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import { config } from './config';
 import { getDb, closeDb } from './db/schema';
+import { activeBackend } from './db/sqlite';
 import { apiRouter, runInitialScan } from './routes/api';
 import { getSessionUser } from './auth/session';
 import { startCacheCleaner, stopAllTranscodeJobs } from './transcode/hls';
@@ -58,6 +59,7 @@ if (require.main === module) {
     console.log(
       `TRANSCODE_ENABLED=${config.TRANSCODE_ENABLED} FFMPEG=${config.FFMPEG_PATH} maxJobs=${config.TRANSCODE_MAX_JOBS}`
     );
+    console.log(`SQLite backend: ${activeBackend()}`);
     console.log(`Default admin user: admin / (ADMIN_PASSWORD)`);
   });
 

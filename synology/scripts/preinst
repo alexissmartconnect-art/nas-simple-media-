@@ -1,0 +1,47 @@
+#!/bin/sh
+# preinst — runs as root before the package files are unpacked.
+
+. "$(dirname "$0")/common.sh"
+
+log "pre-install checks for ${PKGNAME} ${VERSION:-1.2.0}"
+
+# --- DSM version -------------------------------------------------------------
+_dsm_major="${SYNOPKG_DSM_VERSION_MAJOR:-7}"
+_dsm_minor="${SYNOPKG_DSM_VERSION_MINOR:-0}"
+if [ "${_dsm_major}" -lt 7 ]; then
+  die "DSM 7 or newer is required (found ${_dsm_major}.${_dsm_minor})."
+fi
+log "DSM ${_dsm_major}.${_dsm_minor} detected"
+
+# --- architecture ------------------------------------------------------------
+# geminilake covers the DS220+/DS420+/DS720+/DS920+ family (Intel Celeron/Jasper Lake).
+_arch="${SYNOPKG_DSM_ARCH:-unknown}"
+log "host architecture: ${_arch}"
+
+# --- dependencies ------------------------------------------------------------
+if ! find_node >/dev/null 2>&1; then
+  warn "no Node.js runtime found yet. Install the Synology package 'Node.js v22' (DSM 7.2+) before starting."
+else
+  _node="$(find_node)"
+  if node_is_supported "${_node}"; then
+    log "Node.js $(node_version "${_node}") found at ${_node}"
+  else
+    warn "Node.js $(node_version "${_node}") is too old; 'Node.js v22' (>= ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}) is required."
+  fi
+fi
+
+if ! find_ffmpeg >/dev/null 2>&1; then
+  warn "ffmpeg not found. 'Compatible' (HLS) playback will be unavailable; install 'ffmpeg6' from SynoCommunity."
+else
+  log "ffmpeg found at $(find_ffmpeg)"
+fi
+
+# --- port --------------------------------------------------------------------
+if command -v netstat >/dev/null 2>&1; then
+  if netstat -ltn 2>/dev/null | grep -q ":${APP_PORT} "; then
+    warn "port ${APP_PORT} already appears to be in use."
+  fi
+fi
+
+log "pre-install checks done"
+exit 0
