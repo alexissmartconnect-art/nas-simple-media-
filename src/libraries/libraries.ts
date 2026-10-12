@@ -4,9 +4,50 @@ import { config, type LibraryKind } from '../config';
 import { getDb, type LibraryRow, type SessionUser } from '../db/schema';
 import { getUserLibraryIds } from '../users/users';
 
+const FORBIDDEN_SYSTEM_PREFIXES = [
+  '/etc',
+  '/proc',
+  '/sys',
+  '/dev',
+  '/root',
+  '/boot',
+  '/bin',
+  '/sbin',
+  '/usr',
+  '/lib',
+  '/lib64',
+];
+
 export function resolveLibraryPath(libPath: string): string {
   if (path.isAbsolute(libPath)) return path.resolve(libPath);
   return path.resolve(config.MEDIA_PATH, libPath);
+}
+
+export function validateLibraryPath(rawPath: string): string {
+  const libPath = rawPath.trim();
+  if (!libPath) throw new Error('Chemin requis');
+
+  const abs = resolveLibraryPath(libPath);
+  const mediaRoot = path.resolve(config.MEDIA_PATH);
+  const dataRoot = path.resolve(config.DATA_PATH);
+
+  if (!path.isAbsolute(libPath)) {
+    if (!abs.startsWith(mediaRoot + path.sep) && abs !== mediaRoot) {
+      throw new Error('Le chemin doit être sous MEDIA_PATH');
+    }
+  }
+
+  if (abs === '/' || abs === dataRoot || abs.startsWith(dataRoot + path.sep)) {
+    throw new Error('Chemin interdit');
+  }
+
+  for (const prefix of FORBIDDEN_SYSTEM_PREFIXES) {
+    if (abs === prefix || abs.startsWith(prefix + path.sep)) {
+      throw new Error('Chemin système interdit');
+    }
+  }
+
+  return abs;
 }
 
 export function listAllLibraries(): LibraryRow[] {
@@ -32,6 +73,8 @@ export function getLibrary(id: number): LibraryRow | undefined {
 }
 
 export function userCanAccessLibrary(user: SessionUser, libraryId: number): boolean {
+  const lib = getLibrary(libraryId);
+  if (!lib || !lib.enabled) return false;
   if (user.role === 'admin') return true;
   return getUserLibraryIds(user.id).includes(libraryId);
 }
@@ -41,15 +84,8 @@ export function createLibrary(input: { name: string; type: LibraryKind; path: st
   if (!name) throw new Error('Nom requis');
   if (!['movies', 'series', 'music'].includes(input.type)) throw new Error('Type invalide');
   const libPath = input.path.trim();
-  if (!libPath) throw new Error('Chemin requis');
+  const abs = validateLibraryPath(libPath);
 
-  const abs = resolveLibraryPath(libPath);
-  if (!path.isAbsolute(input.path.trim())) {
-    const root = path.resolve(config.MEDIA_PATH);
-    if (!abs.startsWith(root + path.sep) && abs !== root) {
-      throw new Error('Le chemin doit être sous MEDIA_PATH');
-    }
-  }
   try {
     fs.mkdirSync(abs, { recursive: true });
   } catch {
@@ -75,21 +111,20 @@ export function updateLibrary(
   if (!lib) throw new Error('Bibliothèque introuvable');
   const name = patch.name?.trim() || lib.name;
   const libPath = patch.path?.trim() || lib.path;
-  if (patch.path) {
-    const abs = resolveLibraryPath(libPath);
-    if (!path.isAbsolute(patch.path.trim())) {
-      const root = path.resolve(config.MEDIA_PATH);
-      if (!abs.startsWith(root + path.sep) && abs !== root) {
-        throw new Error('Le chemin doit être sous MEDIA_PATH');
-      }
-    }
+  if (patch.path !== undefined) {
+    validateLibraryPath(libPath);
   }
-  getDb()
-    .prepare(
-      `UPDATE libraries SET name = ?, path = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?`
-    )
-    .run(name, libPath, patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : lib.enabled, id);
-  return getLibrary(id)!;
+  try {
+    getDb()
+      .prepare(
+        `UPDATE libraries SET name = ?, path = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?`
+      )
+      .run(name, libPath, patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : lib.enabled, id);
+    return getLibrary(id)!;
+  } catch (e: unknown) {
+    if (String(e).includes('UNIQUE')) throw new Error('Nom de bibliothèque déjà utilisé');
+    throw e;
+  }
 }
 
 export function deleteLibrary(id: number): boolean {

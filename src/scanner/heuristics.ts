@@ -25,13 +25,21 @@ const MUSIC_DASH_RE =
 
 const TRACK_NUM_PREFIX = /^(?<num>\d{1,3})[\s.\-_]+(?<title>.+)$/;
 
+const RELEASE_TAGS_RE =
+  /\b(?:(?:19|20)\d{2}[.\s_\-]+)?(?:2160p|1080p|720p|480p|4k|uhd|bluray|bdrip|brrip|webrip|web-dl|webdl|remux|hdr|hdr10|dv|x264|x265|h264|h265|hevc|av1|xvid|divx|dts(?:-hd)?|truehd|ac3|eac3|aac|flac|multi|vf|vostfr|proper|repack)\b.*$/i;
+
 function clean(s: string): string {
   return s
+    .replace(/\[.*?\]/g, ' ')
+    .replace(/\(.*?\)/g, ' ')
     .replace(/[._]+/g, ' ')
     .replace(/\s+/g, ' ')
-    .replace(/\s*\[.*?\]\s*/g, ' ')
-    .replace(/\s*\(.*?\)\s*/g, () => ' ')
     .trim();
+}
+
+function cleanMovieTitle(s: string): string {
+  const withoutTags = s.replace(RELEASE_TAGS_RE, '').trim();
+  return clean(withoutTags || s);
 }
 
 function stripExt(filename: string): string {
@@ -110,7 +118,7 @@ function seriesFrom(base: string, parts: string[]): ParsedMedia | null {
     const show =
       clean(m.groups.show) ||
       (parts.length >= 2 ? clean(parts[parts.length - 2]) : clean(base));
-    const epTitle = m.groups.epTitle ? clean(m.groups.epTitle) : null;
+    const epTitle = m.groups.epTitle ? cleanMovieTitle(m.groups.epTitle) : null;
     return {
       title:
         epTitle ||
@@ -133,7 +141,7 @@ function seriesFrom(base: string, parts: string[]): ParsedMedia | null {
     const showIdx = parts.findIndex((p) => p === seasonFolder) - 1;
     const show = showIdx >= 0 ? clean(parts[showIdx]) : clean(parts[1] || base);
     return {
-      title: clean(base),
+      title: cleanMovieTitle(base),
       type: 'episode',
       library: 'series',
       show_name: show,
@@ -200,16 +208,25 @@ function musicFrom(base: string, parts: string[]): ParsedMedia {
 }
 
 function movieFrom(base: string, parts: string[]): ParsedMedia {
-  let title = clean(base);
+  let title = cleanMovieTitle(base);
   if (parts.length >= 2) {
     const folder = parts[parts.length - 2];
     if (!/^(movies|films|movie)$/i.test(folder)) {
-      const folderTitle = clean(folder.replace(/\(\d{4}\)/, '').trim());
-      if (folderTitle.length > 2) title = folderTitle;
+      const hasYearInFolder = /[([]\s*(?:19|20)\d{2}\s*[)\]]/.test(folder);
+      const isGenericFilename = /^(movie|film|video|feature|main|disc\d*|cd\d*)$/i.test(title);
+      const folderTitle = cleanMovieTitle(folder);
+      if (
+        folderTitle.length > 2 &&
+        (hasYearInFolder ||
+          isGenericFilename ||
+          title.toLowerCase().startsWith(folderTitle.toLowerCase()))
+      ) {
+        title = folderTitle;
+      }
     }
   }
   return {
-    title,
+    title: title || clean(base),
     type: 'movie',
     library: 'movies',
     show_name: null,

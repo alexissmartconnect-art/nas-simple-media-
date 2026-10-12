@@ -8,20 +8,24 @@ import {
 } from '../src/scanner/heuristics';
 
 describe('extension helpers', () => {
-  it('detects video extensions', () => {
+  it('detects video extensions including mov/ts', () => {
     assert.equal(isVideo('a.mp4'), true);
     assert.equal(isVideo('a.mkv'), true);
     assert.equal(isVideo('a.avi'), true);
     assert.equal(isVideo('a.webm'), true);
+    assert.equal(isVideo('a.mov'), true);
+    assert.equal(isVideo('a.ts'), true);
     assert.equal(isVideo('a.mp3'), false);
   });
 
-  it('detects audio extensions', () => {
+  it('detects audio extensions including ogg/aac', () => {
     assert.equal(isAudio('t.mp3'), true);
     assert.equal(isAudio('t.flac'), true);
     assert.equal(isAudio('t.m4a'), true);
     assert.equal(isAudio('t.opus'), true);
     assert.equal(isAudio('t.wav'), true);
+    assert.equal(isAudio('t.ogg'), true);
+    assert.equal(isAudio('t.aac'), true);
     assert.equal(isAudio('t.mkv'), false);
   });
 });
@@ -60,6 +64,14 @@ describe('movie heuristics', () => {
     assert.equal(p!.library, 'movies');
     assert.equal(p!.type, 'movie');
     assert.match(p!.title, /Inception/i);
+  });
+
+  it('strips release tags and preserves distinct titles inside category subfolders', () => {
+    const p1 = parseMediaFile('Movies/Action/Die.Hard.1988.1080p.BluRay.x264.mkv', 'movies');
+    const p2 = parseMediaFile('Movies/Action/Mad.Max.Fury.Road.2015.2160p.UHD.Remux.mkv', 'movies');
+    assert.ok(p1 && p2);
+    assert.equal(p1!.title, 'Die Hard');
+    assert.equal(p2!.title, 'Mad Max Fury Road');
   });
 
   it('forced movies type', () => {

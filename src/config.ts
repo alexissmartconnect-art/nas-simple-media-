@@ -53,8 +53,27 @@ export const config = {
 export type MediaType = 'movie' | 'episode' | 'track';
 export type LibraryKind = 'movies' | 'series' | 'music';
 
-export const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.webm', '.m4v']);
-export const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.opus', '.wav']);
+export const VIDEO_EXTS = new Set([
+  '.mp4',
+  '.mkv',
+  '.avi',
+  '.webm',
+  '.m4v',
+  '.mov',
+  '.ts',
+  '.m2ts',
+  '.mpg',
+  '.mpeg',
+]);
+export const AUDIO_EXTS = new Set([
+  '.mp3',
+  '.flac',
+  '.m4a',
+  '.opus',
+  '.wav',
+  '.ogg',
+  '.aac',
+]);
 
 // silence unused helper in some builds
 void env;
