@@ -1,4 +1,5 @@
 import { getDb, type UserRow, type SessionUser } from '../db/schema';
+import { config } from '../config';
 import { hashPassword, verifyPassword } from '../auth/passwords';
 import { destroyUserSessions, updateUserSessions } from '../auth/session';
 import { revokeUserStreamTokens } from '../auth/streamTokens';
@@ -178,6 +179,30 @@ export function setUserLibraries(userId: number, libraryIds: number[]): void {
     }
   });
   tx();
+}
+
+/**
+ * True while the seeded `admin` account still uses an installation default
+ * password (`changeme`, or `ADMIN_PASSWORD`). The login page shows a discreet
+ * hint so the very first connection is easy, and it disappears as soon as the
+ * password is changed.
+ */
+export function isDefaultAdminPasswordActive(): boolean {
+  try {
+    const db = getDb();
+    const u = db
+      .prepare(`SELECT * FROM users WHERE username = 'admin' COLLATE NOCASE`)
+      .get() as UserRow | undefined;
+    if (!u || !u.enabled) return false;
+    const candidates = new Set<string>(['changeme']);
+    if (config.ADMIN_PASSWORD) candidates.add(config.ADMIN_PASSWORD);
+    for (const candidate of candidates) {
+      if (candidate && verifyPassword(candidate, u.password_hash)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export function getUserLibraryIds(userId: number): number[] {

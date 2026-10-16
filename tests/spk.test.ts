@@ -13,7 +13,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const SYNO_DIR = path.join(REPO_ROOT, 'synology');
 
 const PACKAGE_NAME = 'nas-simple-media';
-const TARGET_VERSION = '1.4.0';
+const TARGET_VERSION = '1.5.0';
 const TARGET_ARCH = 'geminilake';
 const TARGET_PORT = '8096';
 
@@ -38,7 +38,7 @@ describe('DSM 7 SPK metadata', () => {
     }
   });
 
-  it('targets Synology DS220+ (geminilake) at version 1.4.0', () => {
+  it('targets Synology DS220+ (geminilake) at version 1.5.0', () => {
     const info = readInfo();
     assert.equal(info.get('package'), PACKAGE_NAME);
     assert.equal(info.get('version'), TARGET_VERSION);
@@ -203,6 +203,27 @@ describe('package.json wiring', () => {
     };
     assert.ok(pkg.scripts.test.includes('tests/sqlite.test.ts'), 'sqlite adapter tests must run');
     assert.ok(pkg.scripts.test.includes('tests/spk.test.ts'), 'packaging tests must run');
+    assert.ok(pkg.scripts.test.includes('tests/explorer.test.ts'), 'NAS explorer tests must run');
+    assert.ok(pkg.scripts.test.includes('tests/ui.test.ts'), 'UI smoke tests must run');
+  });
+
+  it('keeps the 1.5.0 version in sync across the package files', () => {
+    assert.equal(readInfo().get('version'), TARGET_VERSION);
+    assert.ok(
+      readScript('preinst').includes(`VERSION:-${TARGET_VERSION}`),
+      `preinst must default to ${TARGET_VERSION}`
+    );
+    const notes = fs.readFileSync(path.join(SYNO_DIR, 'RELEASE_NOTES.md'), 'utf8');
+    assert.ok(
+      notes.startsWith(`## NAS Simple Media ${TARGET_VERSION}`),
+      `RELEASE_NOTES.md must document ${TARGET_VERSION} first`
+    );
+  });
+
+  it('generates the external access settings in the runtime env file', () => {
+    const common = fs.readFileSync(path.join(SYNO_DIR, 'scripts', 'common.sh'), 'utf8');
+    assert.ok(/PUBLIC_BASE_URL=/.test(common), 'common.sh must generate PUBLIC_BASE_URL');
+    assert.ok(/TRUST_PROXY=1/.test(common), 'common.sh must generate TRUST_PROXY for reverse proxies');
   });
 });
 
@@ -224,7 +245,7 @@ describe('release artefacts stay out of git', () => {
       }
     };
     for (const artefact of [
-      'dist-spk/nas-simple-media-1.4.0-geminilake.spk',
+      'dist-spk/nas-simple-media-1.5.0-geminilake.spk',
       'synology/package/app/dist/index.js',
       'node_modules/express/package.json',
       'dist/index.js',

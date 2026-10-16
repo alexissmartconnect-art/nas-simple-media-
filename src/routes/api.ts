@@ -26,6 +26,7 @@ import {
   resolvePublicBaseUrl,
   setCustomPublicBaseUrl,
   qrApiUrl,
+  isPrivateHost,
 } from '../shares/qr';
 import { streamFile, isPathAllowed } from './stream';
 import {
@@ -38,6 +39,7 @@ import {
   changeOwnPassword,
   setUserLibraries,
   getUserLibraryIds,
+  isDefaultAdminPasswordActive,
 } from '../users/users';
 import {
   listLibrariesForUser,
@@ -49,7 +51,12 @@ import {
   userCanAccessLibrary,
   libraryWithStats,
   getLibraryAccessMap,
+  resolveLibraryPath,
+  resolveSynologyAlias,
+  synologyPathCandidates,
 } from '../libraries/libraries';
+import { listServerDirectory } from '../fs/explorer';
+import { describeNetwork, publicIpInfo } from '../net/network';
 import {
   createStreamToken,
   resolveStreamToken,
@@ -104,8 +111,20 @@ function okUser(req: AuthedRequest) {
   return req.user;
 }
 
+/**
+ * Client IP used for rate limiting. `trust proxy` is enabled so reverse-proxy
+ * setups (DSM, Cloudflare Tunnel, Docker) see the real remote address — but a
+ * forwarded address is only honored when the direct peer is a local/private
+ * proxy, so a client hitting port 8096 straight from the Internet cannot forge
+ * `X-Forwarded-For` to bypass the login rate limiter.
+ */
 function clientIp(req: Request): string {
-  return req.ip || req.socket?.remoteAddress || 'unknown';
+  const socketIp = req.socket?.remoteAddress || '';
+  const forwardedIp = req.ip || socketIp;
+  if (forwardedIp && socketIp && forwardedIp !== socketIp && isPrivateHost(socketIp)) {
+    return forwardedIp;
+  }
+  return forwardedIp || socketIp || 'unknown';
 }
 
 function shareClientKey(req: Request): string {
@@ -181,6 +200,17 @@ apiRouter.post('/logout', (req, res) => {
 apiRouter.get('/me', (req, res) => {
   const user = getSessionUser(req.cookies?.[config.COOKIE_NAME]);
   res.json({ authenticated: !!user, user: user || null });
+});
+
+/**
+ * Public, unauthenticated first-run hint for the login page: is the seeded
+ * `admin` account still using its installation default password?
+ */
+apiRouter.get('/setup/status', (_req, res) => {
+  res.json({
+    defaultAdminUser: 'admin',
+    defaultAdminActive: isDefaultAdminPasswordActive(),
+  });
 });
 
 apiRouter.post('/me/password', requireAuth, (req, res) => {
@@ -991,6 +1021,23 @@ apiRouter.get('/admin/libraries', requireAuth, requireAdmin, (_req, res) => {
   res.json({ libraries: listAllLibraries().map(libraryWithStats) });
 });
 
+/** Refresh the index right after a path/name change, without failing the request. */
+function autoScanLibrary(libraryId: number) {
+  try {
+    const r = scanLibrary(libraryId);
+    return {
+      scanned: r.scanned,
+      added: r.added,
+      updated: r.updated,
+      removed: r.removed,
+      errors: r.errors,
+    };
+  } catch (e) {
+    console.error('Auto-scan after library change failed:', e);
+    return { scanned: 0, added: 0, updated: 0, removed: 0, errors: [String(e)] };
+  }
+}
+
 apiRouter.post('/admin/libraries', requireAuth, requireAdmin, (req, res) => {
   try {
     const lib = createLibrary({
@@ -998,7 +1045,9 @@ apiRouter.post('/admin/libraries', requireAuth, requireAdmin, (req, res) => {
       type: req.body?.type,
       path: String(req.body?.path || ''),
     });
-    res.status(201).json(libraryWithStats(lib));
+    // Immediate first index so the library is never empty after creation.
+    const scan = autoScanLibrary(lib.id);
+    res.status(201).json({ ...libraryWithStats(lib), scan });
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
   }
@@ -1011,9 +1060,52 @@ apiRouter.patch('/admin/libraries/:id', requireAuth, requireAdmin, (req, res) =>
       path: req.body?.path,
       enabled: req.body?.enabled,
     });
-    res.json(libraryWithStats(lib));
+    const scan = autoScanLibrary(lib.id);
+    res.json({ ...libraryWithStats(lib), scan });
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
+// ---- Admin: file explorer (browse NAS volumes / USB drives) ----
+/**
+ * `GET /api/admin/fs?path=/volumeUSB1/usbshare1-2`
+ * Lists detected roots + the subfolders of `path` (Synology metadata folders and
+ * hidden files are skipped) with the number of media files they contain and a
+ * French help message when the folder is not readable (EACCES/EPERM).
+ */
+apiRouter.get('/admin/fs', requireAuth, requireAdmin, (req, res) => {
+  const raw = typeof req.query.path === 'string' ? req.query.path : '';
+  const extraRoots = listAllLibraries().map((l) => resolveLibraryPath(l.path));
+  try {
+    const listing = listServerDirectory(raw, extraRoots);
+    const aliasInfo = raw ? { requested: raw, resolved: resolveSynologyAlias(raw) } : null;
+    if (listing.error && !listing.readable && /interdit/.test(listing.error)) {
+      res.status(403).json({ ...listing, alias: aliasInfo });
+      return;
+    }
+    res.json({
+      ...listing,
+      alias: aliasInfo,
+      candidates: raw ? synologyPathCandidates(raw) : [],
+    });
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
+});
+
+// ---- Admin: external access / network ----
+/** Local URL, configured public URL, reverse-proxy detection + French setup guide. */
+apiRouter.get('/admin/network', requireAuth, requireAdmin, (req, res) => {
+  res.json(describeNetwork(req));
+});
+
+/** Best-effort public IP detection (used by the "Option 2 — NAT" guide step). */
+apiRouter.get('/admin/network/public-ip', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    res.json(await publicIpInfo());
+  } catch (e) {
+    res.status(500).json({ error: String(e instanceof Error ? e.message : e) });
   }
 });
 
@@ -1031,7 +1123,7 @@ apiRouter.put('/admin/settings/public-url', requireAuth, requireAdmin, (req, res
     const raw = req.body?.publicBaseUrl ?? req.body?.public_base_url ?? null;
     const saved = setCustomPublicBaseUrl(raw === '' ? null : raw);
     const url = saved || resolvePublicBaseUrl(req);
-    res.json({ ok: true, publicBaseUrl: url });
+    res.json({ ok: true, publicBaseUrl: url, network: describeNetwork(req) });
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
   }

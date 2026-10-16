@@ -485,12 +485,109 @@ video, audio { background: #000; }
 #playerBox .player-toolbar { background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 10px; padding: 0.75rem 0.9rem; }
 
 /* ==========================================================================
+   1.5.0 — NAS/USB explorer, external access panel & first-run assistant
+   ========================================================================== */
+.field-help { font-size: 0.74rem; margin: 0.35rem 0 0; line-height: 1.45; }
+.field-help code, .net-card code, .public-url-banner code { color: var(--accent); font-size: 0.72rem; }
+
+/* --- File explorer (library modal) --- */
+.explorer {
+  border: 1px solid var(--border); border-radius: 8px;
+  background: #151515; padding: 0.55rem; display: flex; flex-direction: column; gap: 0.45rem;
+}
+.explorer-quick { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 92px; overflow-y: auto; }
+.chip-btn {
+  cursor: pointer; font: inherit; font-size: 0.72rem;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border);
+  color: var(--text); border-radius: 999px; padding: 0.22rem 0.55rem;
+}
+.chip-btn:hover { background: rgba(255, 255, 255, 0.1); border-color: #666; }
+.chip-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.explorer-bar { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+.explorer-bar input {
+  flex: 1; min-width: 150px; background: #0f0f0f; border: 1px solid var(--border);
+  color: var(--text-muted); border-radius: 6px; padding: 0.4rem 0.55rem;
+  font: inherit; font-size: 0.76rem;
+}
+.explorer-list {
+  max-height: 210px; overflow-y: auto; border: 1px solid var(--border-soft);
+  border-radius: 6px; background: #101010;
+}
+.explorer-list .empty.compact { padding: 0.85rem 0.7rem; font-size: 0.8rem; border: none; }
+.fs-row {
+  display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
+  padding: 0.42rem 0.6rem; border-bottom: 1px solid var(--border-soft);
+  font-size: 0.82rem; min-width: 0;
+}
+.fs-row:last-child { border-bottom: none; }
+.fs-row:hover { background: var(--accent-dim); }
+.fs-row .fs-icon { flex-shrink: 0; }
+.fs-row .fs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-row .badge { flex-shrink: 0; font-size: 0.68rem; }
+.explorer-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.explorer-hint { font-size: 0.74rem; margin: 0; line-height: 1.45; color: #fbbf24; }
+
+/* --- Warning / alert box --- */
+.warn-box {
+  background: rgba(251, 191, 36, 0.08); border: 1px solid #5c4a1d; border-radius: 8px;
+  padding: 0.6rem 0.75rem; margin: 0.7rem 0; font-size: 0.84rem;
+}
+.warn-box strong { display: block; margin-bottom: 0.25rem; }
+.warn-box p { margin: 0 0 0.5rem; }
+.warn-box code { color: #fbbf24; font-size: 0.75rem; }
+
+/* --- Quick start assistant (home, 0 media) --- */
+.quickstart {
+  background: linear-gradient(145deg, rgba(229, 160, 13, 0.09), rgba(255, 255, 255, 0.02));
+  border: 1px solid #5c4a1d; border-radius: var(--radius);
+  padding: 1rem 1.1rem; margin-bottom: 1.5rem;
+}
+.quickstart h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+.quickstart p { margin: 0 0 0.85rem; font-size: 0.85rem; }
+.quickstart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.6rem; }
+.qs-card {
+  display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; text-align: left;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px;
+  padding: 0.75rem 0.85rem; color: var(--text); font: inherit; cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.qs-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.qs-card .qs-icon { font-size: 1.4rem; }
+.qs-card strong { font-size: 0.88rem; }
+.qs-card .muted { font-size: 0.76rem; line-height: 1.4; }
+
+/* --- External access panel --- */
+.net-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem; margin-bottom: 0.9rem; }
+.net-card { background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 0.85rem 1rem; }
+.net-card h3 { margin: 0 0 0.4rem; font-size: 0.95rem; }
+.net-card .net-url { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.35rem; word-break: break-all; }
+.net-card p { margin: 0 0 0.3rem; font-size: 0.82rem; }
+.net-editor { background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 0.9rem 1rem; margin-bottom: 1.2rem; }
+.net-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-top: 0.6rem; }
+.net-chips .chip.ok { color: var(--ok); border-color: #1f4d3a; }
+.guide { display: flex; flex-direction: column; gap: 0.6rem; }
+.guide-step {
+  background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: var(--radius);
+  padding: 0.75rem 0.95rem;
+}
+.guide-step summary { cursor: pointer; font-weight: 700; font-size: 0.92rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.guide-step p { font-size: 0.83rem; margin: 0.55rem 0 0.4rem; }
+.guide-step ol { margin: 0.4rem 0 0.5rem; padding-left: 1.2rem; font-size: 0.83rem; line-height: 1.55; }
+.guide-step li { margin-bottom: 0.25rem; }
+.guide-step .guide-result { color: var(--ok); font-size: 0.8rem; }
+
+/* ==========================================================================
    Login
    ========================================================================== */
 .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 1rem; background: radial-gradient(900px 480px at 50% -10%, rgba(229, 160, 13, 0.09), transparent 60%), var(--bg); }
 .login-card { width: min(400px, 100%); background: #1d1d1d; border: 1px solid var(--border); border-radius: 14px; padding: 1.6rem; box-shadow: var(--shadow); }
 .login-card h1 { margin: 0 0 0.35rem; font-size: 1.35rem; }
 .login-card p { margin: 0 0 1.1rem; color: var(--text-muted); }
+.login-card .first-run-hint {
+  margin: 0.9rem 0 0; font-size: 0.74rem; line-height: 1.5; color: var(--text-muted);
+  border-top: 1px solid var(--border-soft); padding-top: 0.7rem;
+}
+.login-card .first-run-hint strong { color: var(--text); }
 
 /* ==========================================================================
    Utilities

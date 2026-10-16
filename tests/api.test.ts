@@ -329,4 +329,250 @@ describe('security, scanner, shares, HLS helpers & HTTP API', () => {
     assert.ok(infCount >= 2);
     assert.ok(m3u.includes(`/api/public/share/${share.token}/item/`));
   });
+
+  async function adminCookie(): Promise<string> {
+    const res = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin-secret-password' }),
+    });
+    assert.equal(res.status, 200);
+    return (res.headers.get('set-cookie') || '').split(';')[0];
+  }
+
+  it('auto-scans a library on creation and on modification (1.5.0)', async () => {
+    const cookie = await adminCookie();
+    const dir = path.join(process.env.MEDIA_PATH!, 'AutoScan');
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Alpha.mp4'), 'ALPHA');
+    fs.writeFileSync(path.join(dir, 'sub', 'Beta.mkv'), 'BETA');
+
+    const created = await fetch(`${baseUrl}/api/admin/libraries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ name: 'AutoScanLib', type: 'movies', path: 'AutoScan' }),
+    });
+    assert.equal(created.status, 201);
+    const lib = (await created.json()) as {
+      id: number;
+      item_count: number;
+      resolved_path: string;
+      scan: { scanned: number; added: number };
+    };
+    assert.ok(lib.resolved_path.endsWith('AutoScan'));
+    assert.ok(lib.scan, 'creating a library must trigger a scan');
+    assert.equal(lib.scan.added, 2);
+    assert.equal(lib.item_count, 2);
+
+    // A new file lands in the folder: PATCH must re-scan automatically.
+    fs.writeFileSync(path.join(dir, 'Gamma.mp4'), 'GAMMA');
+    const patched = await fetch(`${baseUrl}/api/admin/libraries/${lib.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ path: 'AutoScan' }),
+    });
+    assert.equal(patched.status, 200);
+    const patchedLib = (await patched.json()) as { item_count: number; scan: { added: number } };
+    assert.equal(patchedLib.scan.added, 1);
+    assert.equal(patchedLib.item_count, 3);
+
+    const del = await fetch(`${baseUrl}/api/admin/libraries/${lib.id}`, {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    });
+    assert.equal(del.status, 200);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exposes the NAS / USB file explorer to admins (GET /api/admin/fs)', async () => {
+    const cookie = await adminCookie();
+    const mediaRoot = process.env.MEDIA_PATH!;
+    fs.writeFileSync(path.join(mediaRoot, 'RootMovie.mp4'), 'ROOT_MOVIE');
+
+    const res = await fetch(`${baseUrl}/api/admin/fs`, { headers: { Cookie: cookie } });
+    assert.equal(res.status, 200);
+    const root = (await res.json()) as {
+      path: string;
+      parent: string | null;
+      readable: boolean;
+      mediaCount: number;
+      dirs: Array<{ name: string; path: string; mediaCount: number }>;
+      roots: Array<{ path: string; kind: string }>;
+    };
+    assert.equal(root.path, mediaRoot);
+    assert.equal(root.readable, true);
+    assert.equal(root.mediaCount, 1);
+    assert.ok(root.roots.some((r) => r.path === mediaRoot && r.kind === 'media'));
+    const names = root.dirs.map((d) => d.name);
+    assert.ok(names.includes('Movies'));
+    assert.ok(names.includes('Series'));
+    assert.equal(names.includes('@eaDir'), false, 'Synology metadata folders must be hidden');
+
+    const moviesPath = path.join(mediaRoot, 'Movies');
+    const deepRes = await fetch(`${baseUrl}/api/admin/fs?path=${encodeURIComponent(moviesPath)}`, {
+      headers: { Cookie: cookie },
+    });
+    const deep = (await deepRes.json()) as {
+      parent: string;
+      dirs: Array<{ name: string; mediaCount: number }>;
+    };
+    assert.equal(deep.parent, mediaRoot);
+    assert.deepEqual(deep.dirs.map((d) => d.name), ['Inception (2010)']);
+    assert.equal(deep.dirs[0].mediaCount, 1);
+
+    // Synology File Station style USB path → real mount point.
+    const aliasRes = await fetch(`${baseUrl}/api/admin/fs?path=${encodeURIComponent('/usbshare1-2/Films')}`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(aliasRes.status, 200);
+    const alias = (await aliasRes.json()) as {
+      readable: boolean;
+      alias: { requested: string; resolved: string };
+      candidates: string[];
+      roots: unknown[];
+    };
+    assert.equal(alias.alias.resolved, '/volumeUSB1/usbshare1-2/Films');
+    assert.equal(alias.candidates[0], '/volumeUSB1/usbshare1-2/Films');
+    assert.equal(alias.readable, false, 'USB drive is not mounted in the test environment');
+    assert.ok(alias.roots.length >= 1);
+
+    // System folders are refused with a French explanation (no listing leak).
+    const sysRes = await fetch(`${baseUrl}/api/admin/fs?path=${encodeURIComponent('/etc')}`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(sysRes.status, 403);
+    const sys = (await sysRes.json()) as { readable: boolean; error: string; dirs: unknown[] };
+    assert.equal(sys.readable, false);
+    assert.match(sys.error, /interdit/);
+    assert.equal(sys.dirs.length, 0);
+
+    // Relative paths are rejected: the explorer only speaks absolute paths.
+    const relRes = await fetch(`${baseUrl}/api/admin/fs?path=Movies`, { headers: { Cookie: cookie } });
+    assert.equal(relRes.status, 400);
+
+    // Admin only.
+    const anonRes = await fetch(`${baseUrl}/api/admin/fs`);
+    assert.equal(anonRes.status, 401);
+    fs.rmSync(path.join(mediaRoot, 'RootMovie.mp4'), { force: true });
+  });
+
+  it('uses the reverse proxy headers for share links, VLC and QR codes', async () => {
+    const cookie = await adminCookie();
+    const external = { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'mon-nas.synology.me' };
+
+    // Make sure no admin-saved URL hides the request origin.
+    const clear = await fetch(`${baseUrl}/api/admin/settings/public-url`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ publicBaseUrl: null }),
+    });
+    assert.equal(clear.status, 200);
+    const cleared = (await clear.json()) as { publicBaseUrl: string };
+    assert.equal(cleared.publicBaseUrl.includes('mon-nas.synology.me'), false);
+
+    const netRes = await fetch(`${baseUrl}/api/admin/network`, {
+      headers: { Cookie: cookie, ...external },
+    });
+    assert.equal(netRes.status, 200);
+    const net = (await netRes.json()) as {
+      port: number;
+      localUrl: string;
+      effectiveBaseUrl: string;
+      requestOrigin: string;
+      forwardedProto: string;
+      forwardedHost: string;
+      behindReverseProxy: boolean;
+      publicUrlIsPrivate: boolean;
+      savedPublicBaseUrl: string | null;
+      mobileLoginUrl: string;
+      shareUrlExample: string;
+      guide: Array<{ id: string; steps: string[] }>;
+    };
+    assert.equal(net.effectiveBaseUrl, 'https://mon-nas.synology.me');
+    assert.equal(net.requestOrigin, 'https://mon-nas.synology.me');
+    assert.equal(net.forwardedProto, 'https');
+    assert.equal(net.forwardedHost, 'mon-nas.synology.me');
+    assert.equal(net.behindReverseProxy, true);
+    assert.equal(net.publicUrlIsPrivate, false);
+    assert.equal(net.savedPublicBaseUrl, null);
+    assert.equal(net.port, 8096);
+    assert.ok(net.localUrl.startsWith('http://'));
+    assert.equal(net.mobileLoginUrl, 'https://mon-nas.synology.me/login.html');
+    assert.ok(net.shareUrlExample.startsWith('https://mon-nas.synology.me/s/'));
+    assert.equal(net.guide.length, 3);
+    assert.ok(net.guide[0].steps.join(' ').includes('Proxy inversé'));
+
+    // LAN-only clients are detected as private → the UI warns about it.
+    const lanRes = await fetch(`${baseUrl}/api/admin/network`, {
+      headers: { Cookie: cookie, 'X-Forwarded-Proto': 'http', 'X-Forwarded-Host': '192.168.1.42:8096' },
+    });
+    const lanNet = (await lanRes.json()) as { effectiveBaseUrl: string; publicUrlIsPrivate: boolean };
+    assert.equal(lanNet.effectiveBaseUrl, 'http://192.168.1.42:8096');
+    assert.equal(lanNet.publicUrlIsPrivate, true);
+
+    // Share links and VLC URLs follow the external domain automatically.
+    const mediaRes = await fetch(`${baseUrl}/api/media?q=Inception`, { headers: { Cookie: cookie, ...external } });
+    const mediaData = (await mediaRes.json()) as { items: Array<{ id: number }> };
+    const movieId = mediaData.items[0].id;
+
+    const shareRes = await fetch(`${baseUrl}/api/shares`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, ...external },
+      body: JSON.stringify({ targetType: 'media', mediaId: movieId }),
+    });
+    assert.equal(shareRes.status, 201);
+    const share = (await shareRes.json()) as { token: string; url: string; qrUrl: string };
+    assert.ok(share.url.startsWith('https://mon-nas.synology.me/s/'), share.url);
+    assert.equal(
+      share.qrUrl,
+      '/api/qr?text=' + encodeURIComponent(`https://mon-nas.synology.me/s/${share.token}`)
+    );
+
+    const vlcRes = await fetch(`${baseUrl}/api/media/${movieId}/vlc`, { headers: { Cookie: cookie, ...external } });
+    const vlc = (await vlcRes.json()) as { streamUrl: string; m3uUrl: string };
+    assert.ok(vlc.streamUrl.startsWith('https://mon-nas.synology.me/'), vlc.streamUrl);
+    assert.ok(vlc.m3uUrl.startsWith('https://mon-nas.synology.me/'), vlc.m3uUrl);
+
+    // An admin-saved public URL still wins over the detected origin.
+    const put = await fetch(`${baseUrl}/api/admin/settings/public-url`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, ...external },
+      body: JSON.stringify({ publicBaseUrl: 'https://media.example.net/' }),
+    });
+    assert.equal(put.status, 200);
+    const putData = (await put.json()) as {
+      publicBaseUrl: string;
+      network: { effectiveBaseUrl: string; savedPublicBaseUrl: string };
+    };
+    assert.equal(putData.publicBaseUrl, 'https://media.example.net');
+    assert.equal(putData.network.effectiveBaseUrl, 'https://media.example.net');
+    assert.equal(putData.network.savedPublicBaseUrl, 'https://media.example.net');
+
+    // Reset for the remaining tests.
+    await fetch(`${baseUrl}/api/admin/settings/public-url`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ publicBaseUrl: null }),
+    });
+  });
+
+  it('announces on the login page whether the default admin password is still active', async () => {
+    const res = await fetch(`${baseUrl}/api/setup/status`);
+    assert.equal(res.status, 200);
+    const data = (await res.json()) as { defaultAdminUser: string; defaultAdminActive: boolean };
+    assert.equal(data.defaultAdminUser, 'admin');
+    assert.equal(data.defaultAdminActive, true, 'ADMIN_PASSWORD is still the seeded one');
+
+    const { getUser, changeOwnPassword } = await import('../src/users/users');
+    const admin = getUser(1)!;
+    changeOwnPassword(admin.id, 'admin-secret-password', 'brand-new-password');
+    try {
+      const after = (await (await fetch(`${baseUrl}/api/setup/status`)).json()) as {
+        defaultAdminActive: boolean;
+      };
+      assert.equal(after.defaultAdminActive, false);
+    } finally {
+      changeOwnPassword(admin.id, 'brand-new-password', 'admin-secret-password');
+    }
+  });
 });

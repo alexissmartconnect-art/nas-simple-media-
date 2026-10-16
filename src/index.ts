@@ -8,9 +8,19 @@ import { apiRouter, runInitialScan } from './routes/api';
 import { getSessionUser } from './auth/session';
 import { startCacheCleaner, stopAllTranscodeJobs } from './transcode/hls';
 
+/**
+ * Reverse proxy support: DSM Reverse Proxy, Cloudflare Tunnel, Tailscale and
+ * nginx all forward `X-Forwarded-Proto` / `X-Forwarded-Host`. Trusting them lets
+ * Express expose the real protocol + host, so share links, `.m3u` streams and QR
+ * codes automatically use the external address (https://mon-nas.synology.me).
+ * Set TRUST_PROXY=0 if port 8096 is exposed directly to the Internet.
+ */
+export const TRUST_PROXY = process.env.TRUST_PROXY !== '0' && process.env.TRUST_PROXY !== 'false';
+
 export function createApp(): Express {
   const app = express();
 
+  app.set('trust proxy', TRUST_PROXY);
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');

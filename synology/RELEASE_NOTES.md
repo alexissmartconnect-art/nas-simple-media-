@@ -1,3 +1,68 @@
+## NAS Simple Media 1.5.0 — Explorateur NAS/USB intégré & Accès Externe clé en main
+
+> **Thème :** plus besoin de taper un chemin Linux, et les liens de partage
+> fonctionnent enfin en 4G/5G.
+
+### 🗂️ Explorateur de dossiers serveur intégré (File Explorer)
+
+- Nouveau `GET /api/admin/fs?path=…` : **volumes et disques détectés automatiquement**
+  (`MEDIA_PATH`, `/volume1`…`/volume4`, `/volumeUSB1`…`/volumeUSB4` + leurs dossiers
+  `usbshare*`, `/volumeSATA*`, `/media`, `/mnt`, dossiers des bibliothèques existantes)
+  affichés en **boutons d'accès rapide**.
+- Dans la modale **Bibliothèque**, le navigateur s'ouvre automatiquement :
+  bouton **⬆ Parent**, **✓ Utiliser ce dossier**, **🏠 MEDIA_PATH**, compteur de
+  **médias présents dans le dossier courant** (et par sous-dossier), rechargement à la demande.
+- Les dossiers techniques Synology (`@eaDir`, `#recycle`, `@tmp`, `@appstore`, fichiers
+  cachés, `$RECYCLE.BIN`, `System Volume Information`, `lost+found`) sont masqués.
+- Dossier protégé (`EACCES`/`EPERM`) → badge **🔒 Accès DSM requis** et mode d'emploi
+  exact : *Panneau de configuration → Dossier partagé → Autorisations → Utilisateur interne
+  du système → Lecture pour `sc-nas-simple-media`*.
+
+### 🔎 Résolution intelligente des chemins Synology (File Station)
+
+- `/usbshare1-2/Films` → `/volumeUSB1/usbshare1-2/Films`
+- `/usbshare1/Films` → `/volumeUSB1/usbshare/Films` (`usbshare1` sur DSM 7)
+- `/video/Films`, `/music/…`, `/photo/…` → `/volume1/…`
+- Les chemins réels restent prioritaires s'ils existent (compatibilité Docker `/media`,
+  `/music`…), et la liste noire des dossiers système (`/etc`, `/proc`, `/dev`…) est conservée.
+
+### 🌐 Accès externe & liens de partage publics
+
+- **Support natif Reverse Proxy / DDNS** : `trust proxy` + `X-Forwarded-Proto` /
+  `X-Forwarded-Host` (et en-tête RFC 7239 `Forwarded`) → liens de partage, flux `.m3u`
+  VLC et QR codes utilisent automatiquement `https://mon-nas.synology.me`
+  (DSM Reverse Proxy, Cloudflare Tunnel, Tailscale, nginx). `TRUST_PROXY=0` pour désactiver.
+- **Nouveau panneau `Administration → 🌐 Accès externe`** (`GET /api/admin/network`) :
+  URL locale détectée (`http://<ip-lan>:8096`), URL publique active, détection du proxy
+  inversé, **détection de l'IP publique**, champ éditable en 1 clic et bouton
+  **📱 Tester / QR Code d'accès mobile**.
+- **Guide pas-à-pas en français** dans l'écran : ① DDNS `*.synology.me` + Proxy inversé DSM
+  (HTTPS gratuit, port 8096 non exposé), ② ouverture de port Box (NAT/PAT), ③ sans ouvrir
+  de port (Tailscale / Cloudflare Tunnel).
+- La modale de partage **avertit** quand le lien généré est encore privé
+  (`localhost`, `192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`, `100.64-127.x`, `*.local`) avec un
+  bouton direct **« Configurer l'adresse externe »**.
+
+### 🚀 Démarrage guidé
+
+- **Scan automatique** à la création et à la modification d'une bibliothèque
+  (`POST` / `PATCH /api/admin/libraries`) : la réponse indique
+  `scan: {scanned, added, updated, removed}`.
+- Accueil **assistant de démarrage** quand 0 média est indexé :
+  *📁 Choisir mes dossiers Films/Séries/Musique*, *⟳ Scanner maintenant*,
+  *🌐 Configurer l'accès externe*.
+- Page de connexion : indication discrète tant que le compte par défaut
+  (`admin` / `changeme`) est actif.
+
+### 🧪 Qualité
+
+- `npm test` : **122 tests**, 0 échec (nouveaux tests explorateur NAS/USB, alias
+  `/usbshare*`, `X-Forwarded-Proto`/`Host` sur les liens de partage, panneau réseau,
+  scan automatique, statut de première connexion).
+- `npx tsc --noEmit` : OK · `npm run spk` : `dist-spk/nas-simple-media-1.5.0-geminilake.spk`.
+
+---
+
 ## NAS Simple Media 1.4.0 — paquet natif DSM 7 pour Synology DS220+
 
 ### Nouveautés 1.4.0 — interface « Plex like »
