@@ -21,6 +21,7 @@
         <button type="button" data-view="shares">Mes partages</button>
         <button type="button" data-view="admin-libs" class="admin-only hidden">Admin · Bibliothèques</button>
         <button type="button" data-view="admin-users" class="admin-only hidden">Admin · Comptes</button>
+        <button type="button" data-view="admin-sessions" class="admin-only hidden">Admin · Sessions</button>
       </nav>
       <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
         <button class="btn admin-only hidden" id="btnRescan" type="button">Rescan</button>
@@ -64,6 +65,28 @@
             <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
           </div>
         </div>
+        <div class="player-controls-row hidden" id="profileRow">
+          <label class="sel">Qualité
+            <select id="selQuality">
+              <option value="original">Original</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+            </select>
+          </label>
+          <label class="sel">Audio
+            <select id="selAudio"></select>
+          </label>
+          <label class="sel">Sous-titres
+            <select id="selSubs"></select>
+          </label>
+          <span class="badge hidden" id="decisionBadge"></span>
+        </div>
+        <div class="resume-bar hidden" id="resumeBar">
+          <span id="resumeText"></span>
+          <button class="btn btn-sm btn-primary" type="button" id="btnResumeYes">Reprendre</button>
+          <button class="btn btn-sm btn-ghost" type="button" id="btnResumeNo">Depuis le début</button>
+        </div>
         <p class="muted player-hint" id="playerHint"></p>
       </div>
       <video id="videoPlayer" controls playsinline class="hidden"></video>
@@ -71,10 +94,56 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="detailModal">
+    <div class="modal detail-modal">
+      <div class="detail-hero">
+        <img id="detailThumb" class="detail-thumb hidden" alt="" />
+        <div class="detail-thumb-fallback" id="detailThumbFallback">🎬</div>
+        <div class="detail-head-text">
+          <h2 id="detailTitle">Titre</h2>
+          <p class="muted" id="detailSub"></p>
+          <div class="detail-badges" id="detailBadges"></div>
+        </div>
+      </div>
+      <p class="muted" id="detailHint" style="font-size:0.85rem"></p>
+      <div class="detail-streams hidden" id="detailStreams"></div>
+      <div class="detail-grid">
+        <div class="field">
+          <label for="detailQuality">Qualité</label>
+          <select id="detailQuality">
+            <option value="original">Original</option>
+            <option value="1080p">1080p</option>
+            <option value="720p">720p</option>
+            <option value="480p">480p</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="detailAudio">Audio</label>
+          <select id="detailAudio"></select>
+        </div>
+        <div class="field">
+          <label for="detailMode">Lecture</label>
+          <select id="detailMode">
+            <option value="auto">Auto (recommandé)</option>
+            <option value="direct">Direct — fichier original</option>
+            <option value="compatible">Compatible — HLS</option>
+          </select>
+        </div>
+      </div>
+      <p class="ok hidden" id="detailResumeInfo"></p>
+      <div class="modal-actions detail-actions">
+        <button class="btn btn-ghost" id="detailClose" type="button">Fermer</button>
+        <button class="btn" id="detailVlc" type="button">VLC</button>
+        <button class="btn" id="detailDl" type="button">Télécharger</button>
+        <button class="btn btn-primary" id="detailPlay" type="button">▶ Lire</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="vlcModal">
     <div class="modal" style="width:min(520px,100%)">
       <h2>Ouvrir dans VLC</h2>
-      <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / AC3 5.1 inclus). Le mode Compatible navigateur downmixe en AAC stéréo.</p>
+      <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / TrueHD / AC-3 5.1 bitstream). Le mode Compatible propose Stéréo ou <strong>Surround 5.1</strong> (DTS → AAC 5.1).</p>
       <div class="qr-box">
         <img id="vlcQrImg" alt="QR Code VLC" />
       </div>

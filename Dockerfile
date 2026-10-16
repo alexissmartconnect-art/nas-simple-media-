@@ -15,8 +15,13 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runtime
 
+# ffmpeg provides both ffmpeg (transcode + thumbs + subtitles) and ffprobe
+# (codec / DTS / 5.1 detection). intel-media-va-driver enables optional
+# VAAPI hardware transcoding when /dev/dri is passed through.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    intel-media-va-driver \
+    vainfo \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

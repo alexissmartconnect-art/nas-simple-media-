@@ -1,6 +1,6 @@
 {
   "name": "nas-simple-media",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Simple free Plex-like media server for Synology NAS — movies, music, TV series, ffmpeg Compatible playback, VLC/download",
   "main": "dist/index.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "tsx watch src/index.ts",
     "spk": "node synology/build-spk.mjs",
     "spk:keep": "node synology/build-spk.mjs --keep-staging",
-    "test": "tsx --test tests/heuristics.test.ts tests/token.test.ts tests/formats.test.ts tests/streamTokens.test.ts tests/sqlite.test.ts tests/spk.test.ts tests/api.test.ts"
+    "test": "tsx --test tests/heuristics.test.ts tests/token.test.ts tests/formats.test.ts tests/streamTokens.test.ts tests/sqlite.test.ts tests/spk.test.ts tests/probe.test.ts tests/decision.test.ts tests/profiles.test.ts tests/playback.test.ts tests/api.test.ts"
   },
   "engines": {
     "node": ">=18"
