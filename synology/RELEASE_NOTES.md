@@ -1,3 +1,16 @@
+## NAS Simple Media 1.5.1 — Diagnostic Tailscale sécurisé
+
+- Bouton **Vérifier Tailscale** dans Administration → Accès externe.
+- Diagnostic réservé à l’administrateur, exécuté avec les droits du paquet :
+  client installé, version, connexion et configuration Funnel ciblant le serveur.
+- Lecture seule : aucune activation, aucun changement de permissions ou d’URL,
+  aucune commande sudo. Délais et sorties bornés, résultat conservé 15 secondes.
+- Accès refusé et réponses non reconnues signalés sans exposer la sortie brute.
+- Les droits d’activation et l’autorisation HTTPS/Funnel restent non confirmés.
+- Guide corrigé : Serve est privé ; Funnel permet l’accès public sans Tailscale
+  chez les proches, avec comptes applicatifs et limites de débit.
+- Aucun changement des privilèges du paquet et aucune publication à l’installation.
+
 ## NAS Simple Media 1.5.0 — Explorateur NAS/USB intégré & Accès Externe clé en main
 
 > **Thème :** plus besoin de taper un chemin Linux, et les liens de partage

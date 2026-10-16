@@ -21,6 +21,13 @@
 
 ---
 
+## Nouveautés 1.5.1 — Diagnostic Tailscale en lecture seule
+
+- **Administration → Accès externe → Vérifier Tailscale** : installation, version,
+  connexion et configuration Funnel, sans activation ni élévation des droits.
+- Distinction explicite entre **Serve privé** et **Funnel public** dans le guide.
+- Les autorisations d’activation et l’accessibilité Internet restent à vérifier sur le NAS.
+
 ## Nouveautés 1.5.0 — Explorateur NAS/USB & Accès externe
 
 - 🗂️ **Explorateur de dossiers intégré** : volumes et disques USB détectés automatiquement
@@ -255,7 +262,7 @@ Identiques à la section [Variables d’environnement](#variables-denvironnement
 npm ci
 npm test          # 122 tests
 npm run build
-npm run spk       # -> dist-spk/nas-simple-media-1.5.0-geminilake.spk
+npm run spk       # -> dist-spk/nas-simple-media-1.5.1-geminilake.spk
 ```
 
 Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié sur
@@ -292,10 +299,29 @@ empêche qu'un client forge les en-têtes `X-Forwarded-*`.
 
 Souvent la seule solution avec le **CGNAT** (Bouygues, Free…) :
 
-- **Tailscale** : paquet Tailscale sur le NAS, `tailscale serve --bg https / http://127.0.0.1:8096`
-  → `https://mon-nas.<tailnet>.ts.net` dans `PUBLIC_BASE_URL`.
+- **Tailscale privé (Serve)** : nécessite Tailscale chez chaque invité ; ce n’est pas un accès public.
+- **Tailscale public (Funnel)** : les proches utilisent seulement un lien HTTPS et leur compte
+  NAS Simple Media. Une autorisation HTTPS/Funnel dans le compte Tailscale peut être nécessaire ;
+  des limites de débit s’appliquent. Le service devient accessible sur Internet : changez le mot de
+  passe administrateur par défaut et créez des comptes `user` avec les seules bibliothèques autorisées.
+  Configuration manuelle par un administrateur Synology :
+  `sudo /var/packages/Tailscale/target/bin/tailscale funnel --bg http://127.0.0.1:8096`.
+  Enregistrez ensuite l’adresse HTTPS obtenue dans **Administration → Accès externe**.
+  Testez en 4G/5G avec Wi-Fi et Tailscale désactivés.
+
 - **Cloudflare Tunnel** : `cloudflared tunnel --url http://localhost:8096` (essai) ou tunnel
   nommé + domaine → `PUBLIC_BASE_URL` adapté. Zero Trust recommandé.
+
+**Diagnostic Tailscale (SPK)** : dans **Administration → Accès externe → Vérifier Tailscale**,
+le serveur recherche le client dans les emplacements connus (dont
+`/var/packages/Tailscale/target/bin/tailscale`) et lit sa version, sa connexion et la
+configuration Funnel. Chaque commande a un délai maximal de 5 secondes et une sortie limitée ;
+le résultat est conservé 15 secondes pour éviter des processus répétés. Cette vérification est
+réservée aux administrateurs et tourne avec les droits du paquet `sc-nas-simple-media`.
+Elle ne lance ni `sudo`, ni connexion, ni activation ; elle ne modifie ni les permissions ni
+l’adresse enregistrée. Une configuration Funnel détectée n’est pas une preuve d’accessibilité
+Internet. Les droits d’activation et l’autorisation du compte restent **non confirmés**.
+Si l’accès est refusé, aucune élévation automatique n’est tentée ; ne passez pas l’application en root.
 
 Les liens générés alors utilisent automatiquement l'adresse externe ; s'ils restent en adresse
 privée, la modale de partage affiche un avertissement avec un bouton **Configurer l'adresse externe**.

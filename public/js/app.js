@@ -1933,6 +1933,14 @@
           .join('')}
       </div>
 
+      <section class="net-card" aria-labelledby="tailscaleTitle">
+        <h3 id="tailscaleTitle">Tailscale — accès pour vos proches</h3>
+        <p class="muted">Sans installation chez vos proches : Funnel publie le service sur Internet ; Serve reste privé.
+          Le diagnostic ci-dessous est en lecture seule et n’active aucun accès public.</p>
+        <button class="btn btn-sm" id="netTailscaleCheck" type="button">Vérifier Tailscale</button>
+        <div id="netTailscaleResult" role="status" aria-live="polite"></div>
+      </section>
+
       <h3 class="section-title">Guide pas-à-pas — publier NAS Simple Media sur Internet</h3>
       <div class="guide">
         ${(net.guide || [])
@@ -1974,6 +1982,32 @@
         return null;
       }
     };
+
+    $('netTailscaleCheck').addEventListener('click', async () => {
+      // Keep references: navigation can replace this panel while the request runs.
+      const button = $('netTailscaleCheck');
+      const result = $('netTailscaleResult');
+      button.disabled = true;
+      result.textContent = 'Vérification en cours… (aucune modification)';
+      try {
+        const diagnostic = await api('/api/admin/network/tailscale');
+        result.innerHTML = `
+          <p>Compte du service : <strong>${escapeHtml(diagnostic.serviceUser)}</strong>
+          · Diagnostic en lecture seule (résultat conservé 15 secondes).</p>
+          <ul>${diagnostic.checks.map((check) => `<li>
+            <strong>${escapeHtml(check.label)}</strong>
+            <span class="badge ${check.status === 'ok' ? 'ok' : 'warn'}">${escapeHtml(
+              ({ ok: 'Vérifié', warning: 'À vérifier', error: 'Erreur', unknown: 'Non confirmé' })[check.status] || 'Non confirmé'
+            )}</span> — ${escapeHtml(check.message)}</li>`).join('')}</ul>
+          ${diagnostic.publicUrl ? `<p>Adresse configurée : <code>${escapeHtml(diagnostic.publicUrl)}</code>.
+            Testez-la en 4G/5G, Wi-Fi et Tailscale désactivés, avant de l’enregistrer ci-dessus.</p>` : ''}
+          <p class="muted">${escapeHtml(diagnostic.notice)}</p>`;
+      } catch (e) {
+        result.textContent = `Diagnostic indisponible : ${e.message}. Aucune configuration modifiée.`;
+      } finally {
+        button.disabled = false;
+      }
+    });
 
     $('netSave').addEventListener('click', () =>
       saveUrl($('netPublicUrl').value.trim(), (u) => `Adresse externe enregistrée : ${u}`)

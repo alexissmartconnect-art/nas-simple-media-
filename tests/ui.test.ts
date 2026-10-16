@@ -112,6 +112,13 @@ async function bootUi(options: UiOptions = {}) {
         parent: requested === MEDIA_ROOT ? '/' : MEDIA_ROOT,
       });
     }
+    if (url === '/api/admin/network/tailscale') {
+      return jsonResponse({
+        readOnly: true, serviceUser: 'sc-nas-simple-media', publicUrl: null,
+        checks: [{ label: 'Configuration Funnel', status: 'warning', message: '<script>untrusted</script> Serve reste privé.' }],
+        notice: 'Aucune modification.',
+      });
+    }
     if (url === '/api/admin/network/public-ip') {
       return jsonResponse({
         publicIp: '82.64.10.20',
@@ -241,6 +248,21 @@ describe('Web UI 1.5.0 — explorer, accès externe & avertissement de partage',
     assert.equal(win.document.getElementById('qrModal').classList.contains('hidden'), false);
     assert.equal(win.document.getElementById('qrModalUrl').value, 'http://192.168.1.42:8096/login.html');
     win.document.getElementById('qrModalClose').click();
+  });
+
+  it('runs a read-only Tailscale diagnostic and escapes its output without saving a URL', async () => {
+    const before = calls.length;
+    const button = win.document.getElementById('netTailscaleCheck');
+    assert.ok(button);
+    button.click();
+    assert.equal(button.disabled, true);
+    await wait(win);
+    assert.equal(button.disabled, false);
+    const result = win.document.getElementById('netTailscaleResult');
+    assert.match(result.textContent, /sc-nas-simple-media/);
+    assert.match(result.textContent, /À vérifier/);
+    assert.equal(result.querySelector('script'), null);
+    assert.deepEqual(calls.slice(before), ['GET /api/admin/network/tailscale']);
   });
 
   it('opens the NAS/USB explorer in the library modal and selects a folder', async () => {
