@@ -17,6 +17,15 @@ services:
       FFMPEG_PATH: "${FFMPEG_PATH:-ffmpeg}"
       # Synology CPU is weak — keep 1 (or 2 max)
       TRANSCODE_MAX_JOBS: "${TRANSCODE_MAX_JOBS:-1}"
+      # Plex-like engine: Direct Stream remux + AAC 5.1 surround for DTS/TrueHD
+      TRANSCODE_VIDEO_COPY: "${TRANSCODE_VIDEO_COPY:-true}"
+      TRANSCODE_SURROUND_CODEC: "${TRANSCODE_SURROUND_CODEC:-aac}"
+      PROBE_ENABLED: "${PROBE_ENABLED:-true}"
+      THUMBS_ENABLED: "${THUMBS_ENABLED:-true}"
+      # Hardware accel (Intel iGPU, e.g. DS220+): uncomment + set TRANSCODE_HWACCEL=auto
+      # TRANSCODE_HWACCEL: "${TRANSCODE_HWACCEL:-none}"
+    # devices:
+    #   - /dev/dri:/dev/dri  # required for VAAPI/QSV hardware transcoding
     volumes:
       # Synology: replace host paths with your shared folders
       - /volume1/media:/media:ro

@@ -53,9 +53,35 @@ export function streamFile(
   const range = req.headers.range;
   const downloadName = opts?.filename || path.basename(absPath);
 
+  // Plex-like caching: ETag + Last-Modified allow players to resume / revalidate
+  // seeks cheaply instead of re-downloading.
+  const etag = `"${size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const lastModified = stat.mtime.toUTCString();
+
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Content-Type', contentType);
   res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('ETag', etag);
+  res.setHeader('Last-Modified', lastModified);
+
+  // Caching preconditions
+  const ifNoneMatch = req.headers['if-none-match'];
+  if (ifNoneMatch && !opts?.download && !range) {
+    const tags = String(ifNoneMatch).split(',').map((t) => t.trim());
+    if (tags.includes('*') || tags.includes(etag)) {
+      res.status(304).end();
+      return;
+    }
+  }
+  // If-Range: stale entity → ignore Range and send the full file (RFC 7233)
+  const ifRange = req.headers['if-range'];
+  let effectiveRange = range;
+  if (ifRange && range) {
+    const v = String(ifRange).trim();
+    if (v !== etag && v !== lastModified && v !== '*') {
+      effectiveRange = undefined;
+    }
+  }
   if (opts?.download) {
     res.setHeader(
       'Content-Disposition',
@@ -63,7 +89,7 @@ export function streamFile(
     );
   }
 
-  if (!range) {
+  if (!effectiveRange) {
     res.setHeader('Content-Length', size);
     res.status(200);
     if (req.method === 'HEAD') {
@@ -74,7 +100,7 @@ export function streamFile(
     return;
   }
 
-  const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+  const m = /^bytes=(\d*)-(\d*)$/.exec(effectiveRange);
   if (!m || (!m[1] && !m[2])) {
     res.status(416).setHeader('Content-Range', `bytes */${size}`).end();
     return;

@@ -5,6 +5,8 @@ import { getDb, type LibraryRow } from '../db/schema';
 import { isMediaFile, parseMediaFile } from './heuristics';
 import { listAllLibraries, resolveLibraryPath } from '../libraries/libraries';
 import { invalidateTranscodeCache } from '../transcode/hls';
+import { enqueueBackgroundProbe } from '../media/probe';
+import { invalidateProbe } from '../media/probe';
 
 export interface ScanResult {
   scanned: number;
@@ -145,9 +147,15 @@ function scanOneLibrary(lib: LibraryRow, result: ScanResult): void {
     upsert.run(payload);
     if (!existing) {
       result.added++;
+      if (config.PROBE_ON_SCAN) {
+        const row = getExisting.get(lib.id, norm) as { id: number } | undefined;
+        if (row) enqueueBackgroundProbe(row.id);
+      }
     } else if (existing.mtime !== payload.mtime || existing.size_bytes !== payload.size_bytes) {
       result.updated++;
       invalidateTranscodeCache(existing.id);
+      invalidateProbe(existing.id);
+      if (config.PROBE_ON_SCAN) enqueueBackgroundProbe(existing.id);
     }
   }
 

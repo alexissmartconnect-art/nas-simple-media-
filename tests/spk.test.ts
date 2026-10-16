@@ -13,7 +13,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const SYNO_DIR = path.join(REPO_ROOT, 'synology');
 
 const PACKAGE_NAME = 'nas-simple-media';
-const TARGET_VERSION = '1.2.0';
+const TARGET_VERSION = '1.4.0';
 const TARGET_ARCH = 'geminilake';
 const TARGET_PORT = '8096';
 
@@ -38,7 +38,7 @@ describe('DSM 7 SPK metadata', () => {
     }
   });
 
-  it('targets Synology DS220+ (geminilake) at version 1.2.0', () => {
+  it('targets Synology DS220+ (geminilake) at version 1.4.0', () => {
     const info = readInfo();
     assert.equal(info.get('package'), PACKAGE_NAME);
     assert.equal(info.get('version'), TARGET_VERSION);
@@ -219,7 +219,7 @@ describe('release artefacts stay out of git', () => {
       }
     };
     for (const artefact of [
-      'dist-spk/nas-simple-media-1.2.0-geminilake.spk',
+      'dist-spk/nas-simple-media-1.4.0-geminilake.spk',
       'synology/package/app/dist/index.js',
       'node_modules/express/package.json',
       'dist/index.js',

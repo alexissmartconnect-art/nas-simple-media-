@@ -66,7 +66,35 @@ import {
   readPlaylist,
   isTranscodeEnabled,
   touchJob,
+  listTranscodeJobs,
+  activeTranscodeCount,
+  killTranscodeJob,
 } from '../transcode/hls';
+import {
+  parseProfileFromQuery,
+  decideHls,
+  modeLabel,
+  profileLabel,
+  type SessionProfile,
+} from '../transcode/decision';
+import {
+  ensureProbeForItem,
+  getCachedProbe,
+  summarizeProbe,
+  audioTrackLabel,
+  subtitleTrackLabel,
+  videoTrackLabel,
+} from '../media/probe';
+import { ensureThumb, thumbCacheKey } from '../media/thumbs';
+import { ensureSubtitleVtt, checkSubtitle } from '../media/subtitles';
+import {
+  saveProgress,
+  getProgress,
+  clearProgress,
+  listContinueWatching,
+  listRecentlyAdded,
+} from '../playback/progress';
+import { parseMediaSort, parseSortOrder, buildMediaOrderBy } from './mediaSort';
 import fs from 'fs';
 import path from 'path';
 
@@ -261,12 +289,13 @@ apiRouter.get('/media', requireAuth, (req, res) => {
   }
 
   const whereSql = `WHERE ${where.join(' AND ')}`;
+  const sortKey = parseMediaSort(req.query.sort);
+  const sortOrder = parseSortOrder(req.query.order, sortKey);
+  const orderBy = buildMediaOrderBy(sortKey, sortOrder);
   const items = db
     .prepare(
       `SELECT * FROM media_items ${whereSql}
-       ORDER BY
-         CASE kind WHEN 'series' THEN show_name WHEN 'music' THEN artist ELSE title END,
-         season, episode, album, track_num, title
+       ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`
     )
     .all(...params, limit, offset) as MediaItem[];
@@ -275,10 +304,43 @@ apiRouter.get('/media', requireAuth, (req, res) => {
     db.prepare(`SELECT COUNT(*) as c FROM media_items ${whereSql}`).get(...params) as { c: number }
   ).c;
 
-  res.json({ items, total, limit, offset });
+  res.json({ items, total, limit, offset, sort: sortKey, order: sortOrder });
 });
 
-apiRouter.get('/media/:id', requireAuth, (req, res) => {
+/**
+ * Plex-like "preplay" payload: real codecs (ffprobe), audio/subtitle tracks,
+ * surround availability, resume point. Probing is cached — first call on a
+ * file pays one fast ffprobe run, later calls are instant.
+ */
+async function mediaDetailPayload(
+  user: ReturnType<typeof okUser>,
+  item: MediaItem
+): Promise<Record<string, unknown>> {
+  let probe = getCachedProbe(item);
+  if (!probe && config.PROBE_ENABLED) {
+    probe = await ensureProbeForItem(item);
+  }
+  const summary = probe ? summarizeProbe(probe) : null;
+  const playback = getPlaybackHint(item.filename || item.path, item.type, summary);
+  const progress = user ? getProgress(user.id, item.id) : null;
+  return {
+    ...item,
+    playback,
+    transcodeEnabled: isTranscodeEnabled(),
+    probeAvailable: !!probe,
+    summary,
+    video: probe ? probe.video.map((v) => ({ ...v, label: videoTrackLabel(v) })) : [],
+    audio: probe ? probe.audio.map((a) => ({ ...a, label: audioTrackLabel(a) })) : [],
+    subtitles: probe
+      ? probe.subtitles.map((s) => ({ ...s, label: subtitleTrackLabel(s) }))
+      : [],
+    hasThumb: item.type !== 'track' && config.THUMBS_ENABLED,
+    passthroughAllowed: config.TRANSCODE_AUDIO_PASSTHROUGH,
+    progress,
+  };
+}
+
+apiRouter.get('/media/:id', requireAuth, async (req, res) => {
   const user = okUser(req as AuthedRequest);
   const item = getDb()
     .prepare('SELECT * FROM media_items WHERE id = ?')
@@ -287,12 +349,150 @@ apiRouter.get('/media/:id', requireAuth, (req, res) => {
     res.status(404).json({ error: 'Not found' });
     return;
   }
-  const playback = getPlaybackHint(item.filename || item.path, item.type);
+  res.json(await mediaDetailPayload(user, item));
+});
+
+/** Streams + transcode decision for one profile (drives the player's selectors). */
+apiRouter.get('/media/:id/streams', requireAuth, async (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  let probe = getCachedProbe(item);
+  if (!probe && config.PROBE_ENABLED) {
+    probe = await ensureProbeForItem(item);
+  }
+  const summary = probe ? summarizeProbe(probe) : null;
+  const decision = decideHls(probe, item.filename || item.path, profile);
   res.json({
-    ...item,
-    playback,
-    transcodeEnabled: isTranscodeEnabled(),
+    profile,
+    profileLabel: profileLabel(profile),
+    decision: { ...decision, modeLabel: modeLabel(decision.mode) },
+    probeAvailable: !!probe,
+    summary,
+    audio: probe ? probe.audio.map((a) => ({ ...a, label: audioTrackLabel(a) })) : [],
+    subtitles: probe
+      ? probe.subtitles.map((s) => ({ ...s, label: subtitleTrackLabel(s) }))
+      : [],
+    passthroughAllowed: config.TRANSCODE_AUDIO_PASSTHROUGH,
+    qualities: ['original', '1080p', '720p', '480p'],
   });
+});
+
+/** Video thumbnail (Plex-like poster), generated once then cached. */
+apiRouter.get('/media/:id/thumb.jpg', requireAuth, async (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item || item.type === 'track') {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const key = thumbCacheKey(item);
+  if (req.headers['if-none-match'] === key) {
+    res.status(304).end();
+    return;
+  }
+  const file = await ensureThumb(item);
+  if (!file) {
+    res.status(404).json({ error: 'Thumbnail unavailable' });
+    return;
+  }
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.setHeader('ETag', key);
+  pipeSegmentFile(file, 'image/jpeg', res);
+});
+
+/** Embedded subtitle extracted to WebVTT. */
+apiRouter.get('/media/:id/subtitles/:index.vtt', requireAuth, async (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index > 31) {
+    res.status(400).json({ error: 'Invalid subtitle index' });
+    return;
+  }
+  const avail = await checkSubtitle(item, index);
+  if (!avail.ok) {
+    res.status(404).json({ error: avail.reason || 'Subtitle unavailable' });
+    return;
+  }
+  const file = await ensureSubtitleVtt(item, index);
+  if (!file) {
+    res.status(503).json({ error: 'Extraction failed — ffmpeg requis' });
+    return;
+  }
+  res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  pipeSegmentFile(file, 'text/vtt; charset=utf-8', res);
+});
+
+// ---- Playback progress (Continue watching / resume) ----
+apiRouter.post('/media/:id/progress', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const item = getAccessibleMedia(user, Number(req.params.id));
+  if (!item) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const positionMs = Number(req.body?.positionMs ?? req.body?.position_ms ?? 0);
+  const durationMs = Number(req.body?.durationMs ?? req.body?.duration_ms ?? 0);
+  const p = saveProgress(user.id, item.id, positionMs, durationMs);
+  res.json({ ok: true, progress: p });
+});
+
+apiRouter.delete('/media/:id/progress', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  clearProgress(user.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+
+apiRouter.get('/continue-watching', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const allowed = listLibrariesForUser(user).map((l) => l.id);
+  const limit = Math.min(parseInt(String(req.query.limit || '20'), 10) || 20, 50);
+  const items = listContinueWatching(user.id, allowed, limit).map((it) => ({
+    ...it,
+    playback: getPlaybackHint(it.filename || it.path, it.type),
+  }));
+  res.json({ items });
+});
+
+apiRouter.get('/recently-added', requireAuth, (req, res) => {
+  const user = okUser(req as AuthedRequest);
+  const allowed = listLibrariesForUser(user).map((l) => l.id);
+  const limit = Math.min(parseInt(String(req.query.limit || '20'), 10) || 20, 50);
+  const items = listRecentlyAdded(allowed, limit).map((it) => ({
+    ...it,
+    playback: getPlaybackHint(it.filename || it.path, it.type),
+  }));
+  res.json({ items });
+});
+
+// ---- Admin: live transcode sessions (Plex-like dashboard) ----
+apiRouter.get('/admin/sessions', requireAuth, requireAdmin, (_req, res) => {
+  res.json({
+    jobs: listTranscodeJobs(),
+    activeCount: activeTranscodeCount(),
+    maxJobs: config.TRANSCODE_MAX_JOBS,
+    hwaccel: config.TRANSCODE_HWACCEL,
+  });
+});
+
+apiRouter.delete('/admin/sessions/:key', requireAuth, requireAdmin, (req, res) => {
+  const ok = killTranscodeJob(String(req.params.key));
+  if (!ok) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 apiRouter.get('/series', requireAuth, (req, res) => {
@@ -472,7 +672,7 @@ apiRouter.get('/media/:id/vlc', requireAuth, (req, res) => {
     vlcUri: `vlc://${streamUrl.replace(/^https?:\/\//, '')}`,
     help:
       'Dans VLC : Média → Ouvrir un flux réseau → collez streamUrl. Ou en CLI : vlc "<streamUrl>". ' +
-      'Le fichier .m3u ouvre directement le flux authentifié. VLC lit DTS/AC3 5.1 ; le mode Compatible navigateur downmixe en AAC stéréo.',
+      'Le fichier .m3u ouvre directement le flux authentifié. VLC lit le bitstream original (DTS/TrueHD/AC-3 5.1) ; le mode Compatible propose Stéréo ou Surround 5.1 (DTS → AAC 5.1).',
     expiresInMs: config.STREAM_TOKEN_TTL_MS,
   });
 });
@@ -501,6 +701,26 @@ apiRouter.get('/media/:id/playlist.m3u', (req, res) => {
   res.send(body);
 });
 
+/** Resolve the cached probe for an HLS session (never blocks on a fresh probe). */
+function hlsProbeFor(item: MediaItem) {
+  const cached = getCachedProbe(item);
+  if (cached) return cached;
+  if (config.PROBE_ENABLED) {
+    // Kick off a background probe so the NEXT session can Direct Stream.
+    ensureProbeForItem(item).catch(() => {});
+  }
+  return null;
+}
+
+function profileQueryString(profile: SessionProfile): string {
+  const parts: string[] = [];
+  if (profile.quality !== 'original') parts.push(`quality=${profile.quality}`);
+  if (profile.audioIndex !== 0) parts.push(`audio=${profile.audioIndex}`);
+  if (profile.surround) parts.push('surround=1');
+  if (profile.passthrough) parts.push('passthrough=1');
+  return parts.join('&');
+}
+
 /** HLS Compatible mode — start ffmpeg job + return status / playlist URL. */
 apiRouter.get('/stream/:id/hls', (req, res) => {
   const mediaId = Number(req.params.id);
@@ -521,13 +741,27 @@ apiRouter.get('/stream/:id/hls', (req, res) => {
     });
     return;
   }
-  const st = ensureTranscode(mediaId, item.path);
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  const probe = hlsProbeFor(item);
+  const decision = decideHls(probe, item.filename || item.path, profile);
+  const st = ensureTranscode(mediaId, item.path, {
+    profile,
+    probe,
+    filename: item.filename || item.path,
+  });
   const qToken = typeof req.query.token === 'string' ? req.query.token : '';
-  const tokenQs = qToken ? `?token=${encodeURIComponent(qToken)}` : '';
+  const qsParts: string[] = [];
+  if (qToken) qsParts.push(`token=${encodeURIComponent(qToken)}`);
+  const pq = profileQueryString(profile);
+  if (pq) qsParts.push(pq);
+  const qs = qsParts.length ? `?${qsParts.join('&')}` : '';
   res.json({
     ...st,
-    playlistUrl: `/api/stream/${mediaId}/hls/playlist.m3u8${tokenQs}`,
-    note: 'Compatible = H.264 + AAC stéréo (downmix). Pas de passthrough DTS dans le navigateur.',
+    playlistUrl: `/api/stream/${mediaId}/hls/playlist.m3u8${qs}`,
+    decision: { ...decision, modeLabel: modeLabel(decision.mode) },
+    note: decision.mode === 'direct-stream'
+      ? 'Remux direct : vidéo copiée sans ré-encodage, audio converti si besoin (DTS → AAC 5.1 en Surround).'
+      : 'Compatible = H.264 + AAC (Stéréo par défaut, Surround 5.1 si demandé). DTS/TrueHD préservés en multicanal.',
   });
 });
 
@@ -539,19 +773,27 @@ apiRouter.get('/stream/:id/hls/playlist.m3u8', (req, res) => {
     res.status(503).json({ error: 'Transcodage désactivé' });
     return;
   }
-  ensureTranscode(mediaId, item.path);
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  ensureTranscode(mediaId, item.path, {
+    profile,
+    probe: hlsProbeFor(item),
+    filename: item.filename || item.path,
+  });
   const qToken = typeof req.query.token === 'string' ? req.query.token : undefined;
-  const tokenQuery = qToken ? `token=${encodeURIComponent(qToken)}` : undefined;
-  const body = readPlaylist(mediaId, tokenQuery);
+  const segQs: string[] = [];
+  if (qToken) segQs.push(`token=${encodeURIComponent(qToken)}`);
+  const pq = profileQueryString(profile);
+  if (pq) segQs.push(pq);
+  const body = readPlaylist(mediaId, segQs.join('&') || undefined, profile);
   if (!body) {
     res.status(202).json({
       error: 'Transcodage en cours',
-      status: getJobStatus(mediaId).status,
+      status: getJobStatus(mediaId, profile).status,
       retryAfterMs: 1500,
     });
     return;
   }
-  touchJob(mediaId);
+  touchJob(mediaId, profile);
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-cache');
   res.send(body);
@@ -561,13 +803,14 @@ apiRouter.get('/stream/:id/hls/:segment', (req, res) => {
   const mediaId = Number(req.params.id);
   const item = authStreamOrToken(req, res, mediaId, 'hls');
   if (!item) return;
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
   const name = path.basename(req.params.segment);
-  const file = getSegmentFile(mediaId, name);
+  const file = getSegmentFile(mediaId, name, profile);
   if (!file) {
     res.status(404).json({ error: 'Segment not found' });
     return;
   }
-  touchJob(mediaId);
+  touchJob(mediaId, profile);
   const ct = name.endsWith('.m3u8')
     ? 'application/vnd.apple.mpegurl'
     : name.endsWith('.ts')
@@ -599,6 +842,13 @@ apiRouter.get('/status', requireAuth, (req, res) => {
       enabled: isTranscodeEnabled(),
       maxJobs: config.TRANSCODE_MAX_JOBS,
       ffmpegPath: config.FFMPEG_PATH,
+      hwaccel: config.TRANSCODE_HWACCEL,
+      videoCopy: config.TRANSCODE_VIDEO_COPY,
+      surroundCodec: config.TRANSCODE_SURROUND_CODEC,
+      passthroughAllowed: config.TRANSCODE_AUDIO_PASSTHROUGH,
+      probeEnabled: config.PROBE_ENABLED,
+      thumbsEnabled: config.THUMBS_ENABLED,
+      qualities: ['original', '1080p', '720p', '480p'],
     },
   });
 });
@@ -969,11 +1219,23 @@ apiRouter.get('/public/share/:token/item/:mediaId/hls', (req, res) => {
     return;
   }
   consumeShareUse(req.params.token, loaded.clientKey);
-  const st = ensureTranscode(loaded.item.id, loaded.item.path);
-  const pw = loaded.password ? `?password=${encodeURIComponent(loaded.password)}` : '';
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  const probe = hlsProbeFor(loaded.item);
+  const decision = decideHls(probe, loaded.item.filename || loaded.item.path, profile);
+  const st = ensureTranscode(loaded.item.id, loaded.item.path, {
+    profile,
+    probe,
+    filename: loaded.item.filename || loaded.item.path,
+  });
+  const qsParts: string[] = [];
+  if (loaded.password) qsParts.push(`password=${encodeURIComponent(loaded.password)}`);
+  const pq = profileQueryString(profile);
+  if (pq) qsParts.push(pq);
+  const qs = qsParts.length ? `?${qsParts.join('&')}` : '';
   res.json({
     ...st,
-    playlistUrl: `/api/public/share/${encodeURIComponent(req.params.token)}/item/${loaded.item.id}/hls/playlist.m3u8${pw}`,
+    playlistUrl: `/api/public/share/${encodeURIComponent(req.params.token)}/item/${loaded.item.id}/hls/playlist.m3u8${qs}`,
+    decision: { ...decision, modeLabel: modeLabel(decision.mode) },
   });
 });
 
@@ -985,18 +1247,26 @@ apiRouter.get('/public/share/:token/item/:mediaId/hls/playlist.m3u8', (req, res)
     return;
   }
   consumeShareUse(req.params.token, loaded.clientKey);
-  ensureTranscode(loaded.item.id, loaded.item.path);
-  const pwQuery = loaded.password ? `password=${encodeURIComponent(loaded.password)}` : undefined;
-  const body = readPlaylist(loaded.item.id, pwQuery);
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  ensureTranscode(loaded.item.id, loaded.item.path, {
+    profile,
+    probe: hlsProbeFor(loaded.item),
+    filename: loaded.item.filename || loaded.item.path,
+  });
+  const segQs: string[] = [];
+  if (loaded.password) segQs.push(`password=${encodeURIComponent(loaded.password)}`);
+  const pq = profileQueryString(profile);
+  if (pq) segQs.push(pq);
+  const body = readPlaylist(loaded.item.id, segQs.join('&') || undefined, profile);
   if (!body) {
     res.status(202).json({
       error: 'Transcodage en cours',
-      status: getJobStatus(loaded.item.id).status,
+      status: getJobStatus(loaded.item.id, profile).status,
       retryAfterMs: 1500,
     });
     return;
   }
-  touchJob(loaded.item.id);
+  touchJob(loaded.item.id, profile);
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-cache');
   res.send(body);
@@ -1006,19 +1276,88 @@ apiRouter.get('/public/share/:token/item/:mediaId/hls/:segment', (req, res) => {
   const loaded = loadPublicShareItem(req, res);
   if (!loaded) return;
   consumeShareUse(req.params.token, loaded.clientKey);
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
   const name = path.basename(req.params.segment);
-  const file = getSegmentFile(loaded.item.id, name);
+  const file = getSegmentFile(loaded.item.id, name, profile);
   if (!file) {
     res.status(404).json({ error: 'Segment not found' });
     return;
   }
-  touchJob(loaded.item.id);
+  touchJob(loaded.item.id, profile);
   const ct = name.endsWith('.m3u8')
     ? 'application/vnd.apple.mpegurl'
     : name.endsWith('.ts')
       ? 'video/mp2t'
       : 'application/octet-stream';
   pipeSegmentFile(file, ct, res, 'private, max-age=3600');
+});
+
+/** Public: codec info + audio/subtitle tracks for a shared item. */
+apiRouter.get('/public/share/:token/item/:mediaId/streams', async (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  let probe = getCachedProbe(loaded.item);
+  if (!probe && config.PROBE_ENABLED) {
+    probe = await ensureProbeForItem(loaded.item);
+  }
+  const summary = probe ? summarizeProbe(probe) : null;
+  const decision = decideHls(probe, loaded.item.filename || loaded.item.path, profile);
+  res.json({
+    profile,
+    profileLabel: profileLabel(profile),
+    decision: { ...decision, modeLabel: modeLabel(decision.mode) },
+    probeAvailable: !!probe,
+    summary,
+    audio: probe ? probe.audio.map((a) => ({ ...a, label: audioTrackLabel(a) })) : [],
+    subtitles: probe
+      ? probe.subtitles.map((s) => ({ ...s, label: subtitleTrackLabel(s) }))
+      : [],
+    passthroughAllowed: config.TRANSCODE_AUDIO_PASSTHROUGH,
+    qualities: ['original', '1080p', '720p', '480p'],
+  });
+});
+
+/** Public: thumbnail for a shared item. */
+apiRouter.get('/public/share/:token/item/:mediaId/thumb.jpg', async (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  if (loaded.item.type === 'track') {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const file = await ensureThumb(loaded.item);
+  if (!file) {
+    res.status(404).json({ error: 'Thumbnail unavailable' });
+    return;
+  }
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  pipeSegmentFile(file, 'image/jpeg', res);
+});
+
+/** Public: embedded subtitle as WebVTT. */
+apiRouter.get('/public/share/:token/item/:mediaId/subtitles/:index.vtt', async (req, res) => {
+  const loaded = loadPublicShareItem(req, res);
+  if (!loaded) return;
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index > 31) {
+    res.status(400).json({ error: 'Invalid subtitle index' });
+    return;
+  }
+  const avail = await checkSubtitle(loaded.item, index);
+  if (!avail.ok) {
+    res.status(404).json({ error: avail.reason || 'Subtitle unavailable' });
+    return;
+  }
+  const file = await ensureSubtitleVtt(loaded.item, index);
+  if (!file) {
+    res.status(503).json({ error: 'Extraction failed' });
+    return;
+  }
+  res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  pipeSegmentFile(file, 'text/vtt; charset=utf-8', res);
 });
 
 apiRouter.get('/public/stream/:token', (req, res) => {
@@ -1166,11 +1505,23 @@ apiRouter.get('/public/hls/:token', (req, res) => {
     return;
   }
   consumeShareUse(req.params.token, clientKey);
-  const st = ensureTranscode(access.media.id, access.media.path);
-  const pw = password ? `?password=${encodeURIComponent(password)}` : '';
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  const probe = hlsProbeFor(access.media);
+  const decision = decideHls(probe, access.media.filename || access.media.path, profile);
+  const st = ensureTranscode(access.media.id, access.media.path, {
+    profile,
+    probe,
+    filename: access.media.filename || access.media.path,
+  });
+  const qsParts: string[] = [];
+  if (password) qsParts.push(`password=${encodeURIComponent(password)}`);
+  const pq = profileQueryString(profile);
+  if (pq) qsParts.push(pq);
+  const qs = qsParts.length ? `?${qsParts.join('&')}` : '';
   res.json({
     ...st,
-    playlistUrl: `/api/public/hls/${encodeURIComponent(req.params.token)}/playlist.m3u8${pw}`,
+    playlistUrl: `/api/public/hls/${encodeURIComponent(req.params.token)}/playlist.m3u8${qs}`,
+    decision: { ...decision, modeLabel: modeLabel(decision.mode) },
   });
 });
 
@@ -1191,18 +1542,26 @@ apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
     return;
   }
   consumeShareUse(req.params.token, clientKey);
-  ensureTranscode(access.media.id, access.media.path);
-  const pwQuery = password ? `password=${encodeURIComponent(password)}` : undefined;
-  const body = readPlaylist(access.media.id, pwQuery);
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
+  ensureTranscode(access.media.id, access.media.path, {
+    profile,
+    probe: hlsProbeFor(access.media),
+    filename: access.media.filename || access.media.path,
+  });
+  const segQs: string[] = [];
+  if (password) segQs.push(`password=${encodeURIComponent(password)}`);
+  const pq = profileQueryString(profile);
+  if (pq) segQs.push(pq);
+  const body = readPlaylist(access.media.id, segQs.join('&') || undefined, profile);
   if (!body) {
     res.status(202).json({
       error: 'Transcodage en cours',
-      status: getJobStatus(access.media.id).status,
+      status: getJobStatus(access.media.id, profile).status,
       retryAfterMs: 1500,
     });
     return;
   }
-  touchJob(access.media.id);
+  touchJob(access.media.id, profile);
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-cache');
   res.send(body);
@@ -1221,13 +1580,14 @@ apiRouter.get('/public/hls/:token/:segment', (req, res) => {
     return;
   }
   consumeShareUse(req.params.token, clientKey);
+  const profile = parseProfileFromQuery(req.query as Record<string, unknown>);
   const name = path.basename(req.params.segment);
-  const file = getSegmentFile(access.media.id, name);
+  const file = getSegmentFile(access.media.id, name, profile);
   if (!file) {
     res.status(404).json({ error: 'Segment not found' });
     return;
   }
-  touchJob(access.media.id);
+  touchJob(access.media.id, profile);
   const ct = name.endsWith('.m3u8')
     ? 'application/vnd.apple.mpegurl'
     : name.endsWith('.ts')

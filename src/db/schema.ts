@@ -108,6 +108,30 @@ function initSchema(database: SqliteDatabase): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- ffprobe cache: real codecs / channels / DTS-5.1 detection (Plex-like media info)
+    CREATE TABLE IF NOT EXISTS media_probe (
+      media_id INTEGER PRIMARY KEY,
+      probe_json TEXT NOT NULL,
+      mtime INTEGER NOT NULL DEFAULT 0,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      probed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    -- Resume / On Deck (Plex-like "Continue watching")
+    CREATE TABLE IF NOT EXISTS playback_progress (
+      user_id INTEGER NOT NULL,
+      media_id INTEGER NOT NULL,
+      position_ms INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      watched INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, media_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_progress_user_updated ON playback_progress(user_id, updated_at);
   `);
   migrateSharesTableIfNeeded(database);
 }
@@ -272,3 +296,20 @@ export type SessionUser = {
   role: 'admin' | 'user';
   can_share: boolean;
 };
+
+export interface MediaProbeRow {
+  media_id: number;
+  probe_json: string;
+  mtime: number;
+  size_bytes: number;
+  probed_at: string;
+}
+
+export interface PlaybackProgressRow {
+  user_id: number;
+  media_id: number;
+  position_ms: number;
+  duration_ms: number;
+  watched: number;
+  updated_at: string;
+}

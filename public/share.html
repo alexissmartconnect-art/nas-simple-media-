@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Partage — NAS Simple Media</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e5a00d'/%3E%3Cpath d='M26 20l18 12-18 12z' fill='%23161616'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
@@ -49,6 +50,23 @@
               <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
             </div>
           </div>
+          <div class="player-controls-row" id="profileRow">
+            <label class="sel">Qualité
+              <select id="selQuality">
+                <option value="original">Original</option>
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+              </select>
+            </label>
+            <label class="sel">Audio
+              <select id="selAudio"></select>
+            </label>
+            <label class="sel">Sous-titres
+              <select id="selSubs"></select>
+            </label>
+            <span class="badge hidden" id="decisionBadge"></span>
+          </div>
           <p class="muted player-hint" id="playerHint"></p>
         </div>
         <div style="margin-top:1rem">
@@ -63,7 +81,7 @@
   <div class="modal-backdrop hidden" id="vlcModal">
     <div class="modal" style="width:min(520px,100%)">
       <h2>Ouvrir dans VLC</h2>
-      <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / AC3 5.1 inclus). Le mode Compatible navigateur downmixe en AAC stéréo.</p>
+      <p class="muted">VLC lit le fichier <strong>original</strong> (DTS / TrueHD / AC-3 5.1 bitstream). Le mode Compatible propose Stéréo ou <strong>Surround 5.1</strong>.</p>
       <div class="qr-box">
         <img id="vlcQrImg" alt="QR Code VLC" />
       </div>
@@ -108,6 +126,9 @@
     let queueIndex = -1;
     let hls = null;
     let playMode = 'direct';
+    let profile = { quality: 'original', audioIndex: 0, surround: false, passthrough: false };
+    let subIndex = -1;
+    let streamsCache = {};
 
     const $ = (id) => document.getElementById(id);
 
@@ -120,8 +141,86 @@
     function itemStream(id) {
       return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/stream' + pwQs();
     }
+    function profileQs() {
+      const parts = [];
+      if (profile.quality !== 'original') parts.push('quality=' + profile.quality);
+      if (profile.audioIndex) parts.push('audio=' + profile.audioIndex);
+      if (profile.surround) parts.push('surround=1');
+      if (profile.passthrough) parts.push('passthrough=1');
+      return parts.join('&');
+    }
     function itemHls(id) {
-      return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/hls' + pwQs();
+      const base = pwQs();
+      const pq = profileQs();
+      if (!pq) return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/hls' + base;
+      return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/hls' + base + (base ? '&' : '?') + pq;
+    }
+    function itemSubUrl(id, idx) {
+      const base = pwQs();
+      return '/api/public/share/' + encodeURIComponent(token) + '/item/' + id + '/subtitles/' + idx + '.vtt' + base;
+    }
+    function applySubtitleTrack() {
+      const video = $('video');
+      video.querySelectorAll('track').forEach((t) => t.remove());
+      if (!current || subIndex < 0) return;
+      const track = document.createElement('track');
+      track.kind = 'subtitles';
+      track.src = itemSubUrl(current.id, subIndex);
+      track.default = true;
+      const meta = ((streamsCache[current.id] || {}).subtitles || []).find((s) => s.index === subIndex);
+      track.label = (meta && meta.label) || 'Sous-titres';
+      if (meta && meta.language) track.srclang = meta.language;
+      video.appendChild(track);
+    }
+    function populateSelectors(item, streams) {
+      $('selQuality').value = profile.quality;
+      const audios = (streams && streams.audio) || [];
+      let ah = '';
+      if (!audios.length) {
+        ah = '<option value="0:stereo">Piste audio par défaut</option>';
+      } else {
+        audios.forEach((a, i) => {
+          const label = a.label || ('Piste ' + (i + 1));
+          ah += `<option value="${i}:stereo"${profile.audioIndex === i && !profile.surround && !profile.passthrough ? ' selected' : ''}>${escapeHtml(label)} — Stéréo</option>`;
+          if (a.channels >= 6) {
+            ah += `<option value="${i}:surround"${profile.audioIndex === i && profile.surround && !profile.passthrough ? ' selected' : ''}>${escapeHtml(label)} — Surround 5.1</option>`;
+          }
+          const lc = String(a.codec || '').toLowerCase();
+          if (streams.passthroughAllowed && (lc === 'ac3' || lc === 'eac3')) {
+            ah += `<option value="${i}:passthrough"${profile.audioIndex === i && profile.passthrough ? ' selected' : ''}>${escapeHtml(label)} — Original (Safari/TV)</option>`;
+          }
+        });
+      }
+      $('selAudio').innerHTML = ah;
+      let sh = `<option value="-1"${subIndex < 0 ? ' selected' : ''}>Aucun</option>`;
+      ((streams && streams.subtitles) || []).forEach((s) => {
+        if (s.imageBased) {
+          sh += `<option value="-1" disabled>${escapeHtml(s.label || 'Image')} — VLC uniquement</option>`;
+        } else {
+          sh += `<option value="${s.index}"${subIndex === s.index ? ' selected' : ''}>${escapeHtml(s.label || ('ST ' + s.index))}</option>`;
+        }
+      });
+      $('selSubs').innerHTML = sh;
+    }
+    async function loadStreams(item) {
+      if (streamsCache[item.id]) return streamsCache[item.id];
+      try {
+        const res = await fetch('/api/public/share/' + encodeURIComponent(token) + '/item/' + item.id + '/streams' + pwQs());
+        if (res.ok) {
+          const data = await res.json();
+          streamsCache[item.id] = data;
+          // Default to surround when available
+          if (data.summary && data.summary.hasSurround) {
+            const idx = (data.audio || []).findIndex((a) => a.channels >= 6);
+            profile.audioIndex = idx >= 0 ? idx : 0;
+            profile.surround = true;
+          }
+          const defSub = (data.subtitles || []).find((s) => s.isDefault && !s.imageBased);
+          subIndex = defSub ? defSub.index : -1;
+          return data;
+        }
+      } catch {}
+      return null;
     }
     function destroyHls() {
       if (hls) { try { hls.destroy(); } catch {} hls = null; }
@@ -146,6 +245,7 @@
       } else {
         video.classList.remove('hidden');
         audio.classList.add('hidden');
+        applySubtitleTrack();
         video.src = stream;
         const onErr = () => {
           video.removeEventListener('error', onErr);
@@ -167,12 +267,21 @@
       audio.classList.add('hidden');
       video.classList.remove('hidden');
       video.removeAttribute('src');
-      $('playerHint').textContent = 'Transcodage Compatible (H.264+AAC stéréo)…';
+      applySubtitleTrack();
+      $('playerHint').textContent = 'Transcodage Compatible (HLS)…';
+      $('decisionBadge').classList.add('hidden');
       const res = await fetch(itemHls(item.id));
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         $('playerHint').textContent = data.error || 'Compatible indisponible — utilisez VLC.';
         return;
+      }
+      if (data.decision) {
+        const badge = $('decisionBadge');
+        badge.textContent = '⚙ ' + (data.decision.modeLabel || data.decision.mode);
+        badge.title = data.decision.reason || '';
+        badge.classList.remove('hidden');
+        $('playerHint').textContent = data.decision.reason || '';
       }
       const playlistUrl = data.playlistUrl;
       for (let i = 0; i < 40; i++) {
@@ -200,9 +309,11 @@
       }
     }
 
-    function playItem(item) {
+    async function playItem(item) {
       current = item;
       queueIndex = filtered.findIndex((x) => x.id === item.id);
+      profile = { quality: 'original', audioIndex: 0, surround: false, passthrough: false };
+      subIndex = -1;
       $('playerBox').classList.remove('hidden');
       $('nowTitle').textContent = item.title;
       const bits = [];
@@ -213,9 +324,21 @@
       $('btnDownload').href = '/api/public/share/' + encodeURIComponent(token) + '/item/' + item.id + '/download' + pwQs();
       $('btnM3u').href = '/api/public/share/' + encodeURIComponent(token) + '/item/' + item.id + '/playlist.m3u' + pwQs();
       $('modeToggle').classList.toggle('hidden', item.type === 'track');
+      $('profileRow').classList.toggle('hidden', item.type === 'track');
+      let streams = null;
+      if (item.type !== 'track') {
+        streams = await loadStreams(item);
+        populateSelectors(item, streamsCache[item.id] || streams);
+      }
+      const summaryBits = [];
+      if (streams && streams.summary) {
+        if (streams.summary.videoLabel) summaryBits.push(streams.summary.videoLabel);
+        (streams.summary.audioLabels || []).slice(0, 2).forEach((a) => summaryBits.push(a));
+      }
       $('playerHint').textContent =
         (item.playback && item.playback.reason ? item.playback.reason + ' — ' : '') +
-        'Direct = original. Compatible = H.264+AAC stéréo. VLC pour DTS 5.1.';
+        (summaryBits.length ? summaryBits.join(' · ') + ' — ' : '') +
+        'Direct = original. Compatible = HLS (Stéréo ou Surround 5.1). VLC = bitstream original.';
       const mode = (item.type !== 'track' && item.playback && item.playback.suggestedMode === 'compatible' && meta.transcodeEnabled !== false)
         ? 'compatible' : 'direct';
       setMode(mode);
@@ -369,6 +492,21 @@
     });
     $('btnModeDirect').addEventListener('click', () => { if (current) { setMode('direct'); playDirect(current); } });
     $('btnModeCompat').addEventListener('click', () => { if (current && current.type !== 'track') { setMode('compatible'); playCompatible(current); } });
+    $('selQuality').addEventListener('change', (e) => {
+      profile.quality = e.target.value;
+      if (current && playMode === 'compatible') playCompatible(current);
+    });
+    $('selAudio').addEventListener('change', (e) => {
+      const m = /^(\d+):(stereo|surround|passthrough)$/.exec(e.target.value || '');
+      profile.audioIndex = m ? Number(m[1]) : 0;
+      profile.surround = !!m && m[2] === 'surround';
+      profile.passthrough = !!m && m[2] === 'passthrough';
+      if (current && playMode === 'compatible') playCompatible(current);
+    });
+    $('selSubs').addEventListener('change', (e) => {
+      subIndex = Number(e.target.value);
+      applySubtitleTrack();
+    });
     $('btnPrev').addEventListener('click', playPrev);
     $('btnNext').addEventListener('click', playNext);
     $('video').addEventListener('ended', playNext);
