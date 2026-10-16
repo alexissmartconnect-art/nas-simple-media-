@@ -18,6 +18,11 @@
     browseMode: 'media',
     folderPath: '',
     publicBaseUrl: '',
+    publicUrlIsPrivate: false,
+    counts: [],
+    network: null,
+    publicIpInfo: null,
+    fs: { path: '', parent: null, roots: [], dirs: [], mediaCount: 0, readable: true, error: null, hint: null, loading: false },
     serverCaps: null,
     detailItem: null,
     detailProfile: { quality: 'original', audioIndex: 0, surround: false, passthrough: false },
@@ -45,7 +50,11 @@
       throw new Error('Unauthorized');
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText);
+    if (!res.ok) {
+      const err = new Error(data.error || res.statusText);
+      err.payload = data;
+      throw err;
+    }
     return data;
   }
 
@@ -155,10 +164,44 @@
     return `<div class="empty">${escapeHtml(msg)}</div>`;
   }
 
+  /** localhost / 192.168.x.x / 10.x.x.x / 172.16-31.x.x / *.local / 100.64-127.x */
+  function isPrivateHostname(hostname) {
+    const h = String(hostname || '')
+      .toLowerCase()
+      .replace(/^\[/, '')
+      .replace(/\]$/, '');
+    if (!h) return true;
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0') return true;
+    if (/\.(local|lan|internal|home)$/.test(h)) return true;
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h)) return true;
+    if (/^fe80:/i.test(h) || /^f[cd][0-9a-f]{2}:/i.test(h)) return true;
+    return false;
+  }
+
+  function isPrivateUrl(url) {
+    try {
+      return isPrivateHostname(new URL(url, location.origin).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  function totalMediaCount() {
+    return (state.counts || []).reduce((sum, c) => sum + (Number(c.count) || 0), 0);
+  }
+
   async function refreshStats() {
     try {
       const st = await api('/api/status');
-      if (st.publicBaseUrl) state.publicBaseUrl = st.publicBaseUrl;
+      if (st.publicBaseUrl) {
+        state.publicBaseUrl = st.publicBaseUrl;
+        state.publicUrlIsPrivate = isPrivateUrl(st.publicBaseUrl);
+      }
+      state.counts = st.counts || [];
       state.serverCaps = st.transcode || null;
       $('stats').innerHTML = (st.counts || [])
         .map(
@@ -262,6 +305,11 @@
         await renderAdminLibs();
         return;
       }
+      if (state.view === 'admin-network') {
+        sectionTitle.textContent = 'Administration — 🌐 Accès externe & Réseau';
+        await renderAdminNetwork();
+        return;
+      }
       if (state.view === 'admin-sessions') {
         sectionTitle.textContent = 'Administration — Sessions de transcodage';
         await renderAdminSessions();
@@ -273,16 +321,72 @@
     }
   }
 
+  /** Guided first-run assistant: no media indexed yet (admin only). */
+  function quickStartHtml() {
+    return `<div class="quickstart">
+      <h3>🚀 Démarrage rapide</h3>
+      <p class="muted">
+        Aucun média n’est encore indexé. Trois étapes et votre serveur est prêt : choisissez vos
+        dossiers, lancez un scan, puis (si besoin) publiez l’accès externe.
+      </p>
+      <div class="quickstart-grid">
+        <button class="qs-card" type="button" data-qs="folders">
+          <span class="qs-icon">📁</span>
+          <strong>Choisir mes dossiers Films / Séries / Musique</strong>
+          <span class="muted">Explorateur NAS/USB intégré — aucun chemin Linux à taper.</span>
+        </button>
+        <button class="qs-card" type="button" data-qs="scan">
+          <span class="qs-icon">⟳</span>
+          <strong>Scanner maintenant</strong>
+          <span class="muted">Indexe les fichiers déjà en place (ffprobe : DTS, 5.1, HDR…).</span>
+        </button>
+        <button class="qs-card" type="button" data-qs="network">
+          <span class="qs-icon">🌐</span>
+          <strong>Configurer l’accès externe</strong>
+          <span class="muted">DDNS + proxy inversé, NAT, ou tunnel — liens 4G/5G & QR codes.</span>
+        </button>
+      </div>
+    </div>`;
+  }
+
+  function bindQuickStart() {
+    content.querySelectorAll('[data-qs]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-qs');
+        if (action === 'network') {
+          setView('admin-network');
+          return;
+        }
+        if (action === 'scan') {
+          btn.disabled = true;
+          api('/api/rescan', { method: 'POST', body: JSON.stringify({}) })
+            .then((r) => {
+              alert(`Scan: ${r.scanned} fichiers, +${r.added}, ~${r.updated}, -${r.removed}`);
+              refreshStats();
+              render();
+            })
+            .catch((e) => alert(e.message))
+            .finally(() => {
+              btn.disabled = false;
+            });
+          return;
+        }
+        // "folders" → open the library modal straight on the NAS explorer
+        setView('admin-libs');
+        setTimeout(() => openLibModal(null), 0);
+      });
+    });
+  }
+
   async function renderBrowse() {
     if (!state.library) {
       await loadLibraries();
       if (!state.libraries.length) {
         sectionTitle.textContent = 'Bibliothèques';
-        content.innerHTML = emptyMsg(
-          isAdmin()
-            ? 'Aucune bibliothèque. Créez-en une dans Admin · Bibliothèques, puis Rescan.'
-            : 'Aucune bibliothèque partagée avec votre compte. Demandez à un admin.'
-        );
+        content.innerHTML = isAdmin()
+          ? quickStartHtml()
+          : emptyMsg('Aucune bibliothèque partagée avec votre compte. Demandez à un admin.');
+        bindQuickStart();
         return;
       }
 
@@ -326,11 +430,14 @@
           state.visibleItems = state.visibleItems.concat(ra.items);
         }
       } catch {}
+      const noMediaYet = isAdmin() && totalMediaCount() === 0;
       content.innerHTML =
+        (noMediaYet ? quickStartHtml() : '') +
         homeRows +
         `<div class="home-row"><h3>Bibliothèques <span class="rail-count">${state.libraries.length}</span></h3><div class="grid">${state.libraries
           .map((l) => libTileHtml(l))
           .join('')}</div></div>`;
+      if (noMediaYet) bindQuickStart();
       bindCards();
       content.querySelectorAll('[data-lib]').forEach((el) => {
         el.addEventListener('click', () => {
@@ -1436,6 +1543,8 @@
     $('shareError').classList.add('hidden');
     $('shareResult').classList.add('hidden');
     $('shareQrBox').classList.add('hidden');
+    $('sharePrivateWarn').classList.add('hidden');
+    $('shareConfigureExternal').classList.toggle('hidden', !isAdmin());
     $('shareExpires').value = '';
     $('shareMaxUses').value = '';
     $('sharePassword').value = '';
@@ -1463,11 +1572,12 @@
           <h3>🌐 URL Internet / Accès distant</h3>
           <p class="muted">Tailscale, Cloudflare Tunnel, DDNS ou IP LAN — utilisée pour les liens de partage et les QR codes.</p>
           <div class="public-url-row">
-            <input id="publicUrlInput" type="url" placeholder="https://media.tailnet.ts.net" value="${escapeAttr(
+            <input id="publicUrlInput" type="url" placeholder="https://mon-nas.synology.me" value="${escapeAttr(
               state.publicBaseUrl || ''
             )}" />
             <button class="btn btn-primary" id="btnSavePublicUrl" type="button">Enregistrer</button>
             <button class="btn btn-ghost" id="btnClearPublicUrl" type="button">Réinit.</button>
+            <button class="btn" id="btnOpenNetworkPanel" type="button">🌐 Guide &amp; accès externe</button>
           </div>
           <p class="ok hidden" id="publicUrlOk"></p>
           <p class="error hidden" id="publicUrlErr"></p>
@@ -1500,6 +1610,8 @@
           })
           .join('')}</div>`;
     }
+    const openNetBtn = $('btnOpenNetworkPanel');
+    if (openNetBtn) openNetBtn.addEventListener('click', () => setView('admin-network'));
     const saveBtn = $('btnSavePublicUrl');
     if (saveBtn) {
       saveBtn.addEventListener('click', async () => {
@@ -1511,6 +1623,7 @@
             body: JSON.stringify({ publicBaseUrl: $('publicUrlInput').value.trim() || null }),
           });
           state.publicBaseUrl = r.publicBaseUrl;
+          state.publicUrlIsPrivate = isPrivateUrl(r.publicBaseUrl);
           $('publicUrlOk').textContent = 'URL enregistrée : ' + r.publicBaseUrl;
           $('publicUrlOk').classList.remove('hidden');
           renderShares();
@@ -1754,6 +1867,285 @@
     }, 5000);
   }
 
+  // ---- Admin: external access & network ----
+  async function renderAdminNetwork() {
+    const net = await api('/api/admin/network');
+    state.network = net;
+    state.publicBaseUrl = net.effectiveBaseUrl;
+    state.publicUrlIsPrivate = net.publicUrlIsPrivate;
+    const badge = net.behindReverseProxy
+      ? '<span class="badge ok">✓ Proxy inversé détecté</span>'
+      : net.publicUrlIsLoopback
+        ? '<span class="badge warn">⚠️ localhost uniquement</span>'
+        : net.publicUrlIsPrivate
+          ? '<span class="badge warn">⚠️ réseau privé</span>'
+          : '<span class="badge ok">✓ adresse publique</span>';
+
+    content.innerHTML = `
+      <div class="net-grid">
+        <div class="net-card">
+          <h3>🏠 Réseau local (LAN / Wi-Fi)</h3>
+          <p class="net-url">${escapeHtml(net.localUrl)}</p>
+          <p class="muted">Depuis chez vous : <code>${escapeHtml(net.localUrl)}</code></p>
+          <p class="muted" style="font-size:0.78rem">Adresses détectées : ${escapeHtml(
+            (net.localUrls || []).map((u) => u.address).join(', ') || '—'
+          )} · port ${net.port}</p>
+        </div>
+        <div class="net-card">
+          <h3>🌍 Adresse externe (Internet / 4G / 5G)</h3>
+          <p class="net-url">${escapeHtml(net.effectiveBaseUrl)}<br/>${badge}</p>
+          <p class="muted" style="font-size:0.78rem">
+            Liens de partage : <code>${escapeHtml(net.shareUrlExample)}</code><br/>
+            Origine vue par le serveur : ${escapeHtml(net.requestOrigin || '—')} ·
+            ${escapeHtml(net.requestProtocol)}
+          </p>
+        </div>
+      </div>
+
+      <div class="net-editor">
+        <div class="field">
+          <label for="netPublicUrl">Adresse externe utilisée dans les liens de partage, flux VLC (.m3u) et QR codes</label>
+          <div class="public-url-row">
+            <input id="netPublicUrl" type="url" placeholder="https://mon-nas.synology.me"
+              value="${escapeAttr(net.savedPublicBaseUrl || '')}" />
+            <button class="btn btn-primary" id="netSave" type="button">💾 Enregistrer</button>
+            <button class="btn" id="netTest" type="button">📱 Tester / QR Code d’accès mobile</button>
+            <button class="btn btn-ghost" id="netReset" type="button">Réinit.</button>
+          </div>
+          <p class="muted field-help">
+            Laisser vide = détection automatique (Reverse Proxy / DDNS). Exemples :
+            <code>https://mon-nas.synology.me</code> · <code>http://82.64.x.x:8096</code> ·
+            <code>https://media.tailnet-xxxx.ts.net</code>
+          </p>
+          <p class="ok hidden" id="netOk"></p>
+          <p class="error hidden" id="netErr"></p>
+        </div>
+        <div class="net-chips">
+          <span class="chip">NAS : <strong>${escapeHtml(net.hostname)}</strong></span>
+          <span class="chip">Port : <strong>${net.port}</strong></span>
+          <span class="chip">X-Forwarded-Proto : <strong>${escapeHtml(net.forwardedProto || '—')}</strong></span>
+          <span class="chip">X-Forwarded-Host : <strong>${escapeHtml(net.forwardedHost || '—')}</strong></span>
+          <span class="chip" id="netPublicIpChip">🔎 IP publique : détection…</span>
+          <button class="btn btn-sm" id="netDetectIp" type="button">🔎 Détecter mon IP publique</button>
+        </div>
+        ${(net.warnings || [])
+          .map((w) => `<div class="warn-box">⚠️ ${escapeHtml(w)}</div>`)
+          .join('')}
+      </div>
+
+      <h3 class="section-title">Guide pas-à-pas — publier NAS Simple Media sur Internet</h3>
+      <div class="guide">
+        ${(net.guide || [])
+          .map(
+            (step) => `<details class="guide-step"${step.recommended ? ' open' : ''}>
+          <summary>
+            ${escapeHtml(step.title)}
+            ${step.recommended ? '<span class="badge ok">recommandé</span>' : ''}
+          </summary>
+          <p class="muted">${escapeHtml(step.summary)}</p>
+          <ol>${step.steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+          <p class="guide-result">✅ ${escapeHtml(step.result)}</p>
+        </details>`
+          )
+          .join('')}
+      </div>`;
+
+    const saveUrl = async (raw, successMsg) => {
+      $('netOk').classList.add('hidden');
+      $('netErr').classList.add('hidden');
+      try {
+        const r = await api('/api/admin/settings/public-url', {
+          method: 'PUT',
+          body: JSON.stringify({ publicBaseUrl: raw || null }),
+        });
+        state.publicBaseUrl = r.publicBaseUrl;
+        state.publicUrlIsPrivate = isPrivateUrl(r.publicBaseUrl);
+        await refreshStats();
+        await renderAdminNetwork(); // fresh DOM: report the result afterwards
+        const message = successMsg(r.publicBaseUrl);
+        if (message) {
+          $('netOk').textContent = message;
+          $('netOk').classList.remove('hidden');
+        }
+        return r.publicBaseUrl;
+      } catch (e) {
+        $('netErr').textContent = e.message;
+        $('netErr').classList.remove('hidden');
+        return null;
+      }
+    };
+
+    $('netSave').addEventListener('click', () =>
+      saveUrl($('netPublicUrl').value.trim(), (u) => `Adresse externe enregistrée : ${u}`)
+    );
+    $('netReset').addEventListener('click', () =>
+      saveUrl(null, (u) => `Réinitialisé — détection automatique (${u}).`)
+    );
+    $('netTest').addEventListener('click', async () => {
+      const typed = $('netPublicUrl').value.trim();
+      if (typed !== (state.network?.savedPublicBaseUrl || '')) {
+        const saved = await saveUrl(typed, () => '');
+        if (!saved) return;
+      }
+      const base = state.network?.effectiveBaseUrl || state.publicBaseUrl || location.origin;
+      const loginUrl = base.replace(/\/+$/, '') + '/login.html';
+      openQrModal(
+        loginUrl,
+        '📱 Accès mobile / 4G-5G',
+        `Scannez ce QR code depuis votre téléphone (hors Wi-Fi) : il ouvre ${loginUrl}. ` +
+          'Si la page ne s’affiche pas, ajustez la Box (options du guide ci-dessous).'
+      );
+    });
+    const detectIp = async (force) => {
+      const chip = $('netPublicIpChip');
+      if (!force && state.publicIpInfo) {
+        if (state.publicIpInfo.publicIp) {
+          chip.innerHTML = `🔎 IP publique : <strong>${escapeHtml(state.publicIpInfo.publicIp)}</strong>`;
+          chip.classList.add('ok');
+        } else {
+          chip.textContent = '🔎 IP publique : non détectée';
+        }
+        return state.publicIpInfo;
+      }
+      try {
+        const info = await api('/api/admin/network/public-ip');
+        state.publicIpInfo = info;
+        if (info.publicIp) {
+          chip.innerHTML = `🔎 IP publique : <strong>${escapeHtml(info.publicIp)}</strong>`;
+          chip.classList.add('ok');
+        } else {
+          chip.textContent = '🔎 IP publique : non détectée';
+        }
+        return info;
+      } catch {
+        chip.textContent = '🔎 IP publique : non détectée';
+        return null;
+      }
+    };
+    $('netDetectIp').addEventListener('click', async () => {
+      const info = await detectIp(true);
+      if (info && info.suggestedUrls && info.suggestedUrls[0]) {
+        $('netPublicUrl').value = info.suggestedUrls[0];
+        $('netErr').classList.add('hidden');
+      } else if (info) {
+        $('netErr').textContent = info.hint;
+        $('netErr').classList.remove('hidden');
+      }
+    });
+    detectIp(false);
+  }
+
+  // ---- NAS / USB explorer (inside the library modal) ----
+  function fsEntryHtml(dir) {
+    const badge = dir.mediaCount
+      ? `<span class="badge ok">${dir.mediaCount} média${dir.mediaCount > 1 ? 's' : ''}</span>`
+      : '';
+    return `<div class="fs-row" data-fs-dir="${escapeAttr(dir.path)}" title="${escapeAttr(dir.path)}">
+      <span class="fs-icon">${dir.isSymlink ? '🔗' : '📁'}</span>
+      <span class="fs-name">${escapeHtml(dir.name)}</span>
+      ${badge}
+    </div>`;
+  }
+
+  function fsRender() {
+    const fsState = state.fs;
+    const quick = $('fsQuick');
+    const lock = fsState.readable
+      ? ''
+      : '<span class="badge warn" title="Accès DSM requis">🔒 Accès DSM requis</span>';
+    if (quick) {
+      quick.innerHTML = (fsState.roots || [])
+        .map((r) => {
+          const icon =
+            r.kind === 'usb' ? '🔌' : r.kind === 'media' ? '📂' : r.kind === 'library' ? '📚' : '💽';
+          const cls = r.path === fsState.path ? 'chip chip-btn active' : 'chip chip-btn';
+          const count = r.mediaCount ? ` · ${r.mediaCount}` : '';
+          return `<button type="button" class="${cls}" data-fs-root="${escapeAttr(r.path)}"
+            title="${escapeAttr(r.path)}${r.readable ? '' : ' — 🔒 accès DSM requis'}">${icon} ${escapeHtml(
+              r.label
+            )}${count}</button>`;
+        })
+        .join('');
+      quick.querySelectorAll('[data-fs-root]').forEach((btn) => {
+        btn.addEventListener('click', () => fsLoad(btn.getAttribute('data-fs-root')));
+      });
+    }
+
+    $('fsPath').value = fsState.path || '';
+    $('fsMediaCount').innerHTML = `${fsState.mediaCount || 0} média${
+      (fsState.mediaCount || 0) > 1 ? 's' : ''
+    } ${lock}`;
+    $('fsUp').disabled = !fsState.parent;
+
+    const list = $('fsList');
+    if (fsState.loading) {
+      list.innerHTML = '<p class="muted" style="padding:0.6rem">Lecture du dossier…</p>';
+    } else if (!fsState.readable) {
+      list.innerHTML = `<div class="empty compact">🔒 ${escapeHtml(
+        fsState.error || 'Dossier illisible'
+      )}</div>`;
+    } else if (!fsState.dirs || !fsState.dirs.length) {
+      list.innerHTML = `<p class="muted" style="padding:0.6rem">Aucun sous-dossier. Les ${
+        fsState.mediaCount || 0
+      } fichier(s) média de ce dossier seront indexés directement.</p>`;
+    } else {
+      list.innerHTML = fsState.dirs.map(fsEntryHtml).join('');
+    }
+
+    const hint = $('fsHint');
+    if (fsState.hint || (!fsState.readable && fsState.error)) {
+      hint.innerHTML = `🔒 <strong>Accès DSM requis</strong> — ${escapeHtml(fsState.hint || fsState.error)}`;
+      hint.classList.remove('hidden');
+    } else {
+      hint.textContent = '';
+      hint.classList.add('hidden');
+    }
+  }
+
+  async function fsLoad(dirPath) {
+    state.fs = { ...state.fs, loading: true, readable: true };
+    fsRender();
+    try {
+      const data = await api(
+        '/api/admin/fs' + (dirPath ? '?path=' + encodeURIComponent(dirPath) : '')
+      );
+      state.fs = { ...state.fs, ...data, loading: false };
+    } catch (e) {
+      const payload = e.payload || {};
+      state.fs = {
+        ...state.fs,
+        loading: false,
+        readable: false,
+        dirs: [],
+        mediaCount: 0,
+        error: e.message,
+        hint: payload.hint || null,
+      };
+    }
+    fsRender();
+  }
+
+  function fsUseCurrent() {
+    if (!state.fs.path) return;
+    $('lPath').value = state.fs.path;
+    $('lPath').focus();
+    $('libError').classList.add('hidden');
+  }
+
+  $('fsUp').addEventListener('click', () => {
+    if (state.fs.parent) fsLoad(state.fs.parent);
+  });
+  $('fsUse').addEventListener('click', fsUseCurrent);
+  $('fsRefresh').addEventListener('click', () => fsLoad(state.fs.path));
+  $('fsHome').addEventListener('click', () => fsLoad(''));
+  $('fsList').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-fs-dir]');
+    if (!row) return;
+    const dirPath = row.getAttribute('data-fs-dir');
+    $('lPath').value = dirPath; // browsing a folder selects it
+    fsLoad(dirPath);
+  });
+
   function openLibModal(lib) {
     state.editLibId = lib ? lib.id : null;
     $('libModalTitle').textContent = lib ? 'Modifier ' + lib.name : 'Nouvelle bibliothèque';
@@ -1764,7 +2156,10 @@
     $('lEnabled').checked = lib ? !!lib.enabled : true;
     $('lEnabled').closest('.field').classList.toggle('hidden', !lib);
     $('libError').classList.add('hidden');
+    $('libScanResult').classList.add('hidden');
     $('libModal').classList.remove('hidden');
+    // Explorer is open automatically: show the library folder, or MEDIA_PATH.
+    fsLoad(lib ? lib.resolved_path || lib.path : '');
   }
 
   // Events
@@ -2030,6 +2425,10 @@
   });
 
   $('shareCancel').addEventListener('click', () => $('shareModal').classList.add('hidden'));
+  $('shareConfigureExternal').addEventListener('click', () => {
+    $('shareModal').classList.add('hidden');
+    if (isAdmin()) setView('admin-network');
+  });
   $('shareCreate').addEventListener('click', async () => {
     $('shareError').classList.add('hidden');
     try {
@@ -2058,6 +2457,16 @@
       $('shareUrlOut').value = share.url;
       setQrImage($('shareQrImg'), share.url);
       $('shareQrBox').classList.remove('hidden');
+      // Warn when the link is still a local-only address (no external URL set).
+      const priv = isPrivateUrl(share.url);
+      state.publicUrlIsPrivate = priv;
+      $('sharePrivateWarn').classList.toggle('hidden', !priv);
+      if (priv) {
+        $('sharePrivateWarnText').innerHTML =
+          `Ce lien (<code>${escapeHtml(share.url.replace(/^https?:\/\//, '').split('/')[0])}</code>) ` +
+          'ne fonctionnera que sur le Wi-Fi local — pas en 4G/5G pour vos proches. ' +
+          'Configurez votre adresse externe pour obtenir un lien partageable partout.';
+      }
       try {
         await navigator.clipboard.writeText(share.url);
       } catch {}
@@ -2105,28 +2514,34 @@
   $('libSave').addEventListener('click', async () => {
     $('libError').classList.add('hidden');
     try {
-      if (state.editLibId) {
-        await api('/api/admin/libraries/' + state.editLibId, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            name: $('lName').value,
-            path: $('lPath').value,
-            enabled: $('lEnabled').checked,
-          }),
-        });
-      } else {
-        await api('/api/admin/libraries', {
-          method: 'POST',
-          body: JSON.stringify({
-            name: $('lName').value,
-            type: $('lType').value,
-            path: $('lPath').value,
-          }),
-        });
+      const saved = state.editLibId
+        ? await api('/api/admin/libraries/' + state.editLibId, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              name: $('lName').value,
+              path: $('lPath').value,
+              enabled: $('lEnabled').checked,
+            }),
+          })
+        : await api('/api/admin/libraries', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: $('lName').value,
+              type: $('lType').value,
+              path: $('lPath').value,
+            }),
+          });
+      // The server scans the new/changed library automatically.
+      const scan = saved && saved.scan;
+      if (scan) {
+        const el = $('libScanResult');
+        el.textContent = `⟳ Scan automatique : ${scan.scanned} fichier(s) analysé(s), +${scan.added} ajouté(s), ~${scan.updated} mis à jour, -${scan.removed} supprimé(s).`;
+        el.classList.remove('hidden');
       }
       $('libModal').classList.add('hidden');
-      refreshStats();
-      renderAdminLibs();
+      await refreshStats();
+      if (state.view === 'admin-libs') renderAdminLibs();
+      else render();
     } catch (e) {
       $('libError').textContent = e.message;
       $('libError').classList.remove('hidden');

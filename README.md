@@ -21,9 +21,30 @@
 
 ---
 
+## Nouveautés 1.5.0 — Explorateur NAS/USB & Accès externe
+
+- 🗂️ **Explorateur de dossiers intégré** : volumes et disques USB détectés automatiquement
+  (`/volume1…4`, `/volumeUSB1…4` + `usbshare*`, `/volumeSATA*`, `/media`, `/mnt`, `MEDIA_PATH`),
+  compteur de médias par dossier, bouton **⬆ Parent**, badge **🔒 Accès DSM requis** avec le
+  mode d'emploi ACL quand un dossier est protégé. Plus besoin de taper un chemin Linux.
+- 🔎 **Chemins File Station** acceptés : `/usbshare1-2/Films` → `/volumeUSB1/usbshare1-2/Films`,
+  `/usbshare1/Films` → `/volumeUSB1/usbshare/Films`, `/video/Films` → `/volume1/video/Films`.
+- 🌐 **Accès externe clé en main** : panneau `Admin → 🌐 Accès externe` (URL locale, IP publique,
+  proxy inversé détecté, QR code d'accès mobile) et **guide pas-à-pas** : DDNS Synology +
+  Proxy inversé DSM (HTTPS gratuit), ouverture de port Box (NAT/PAT 8096), ou tunnel
+  Tailscale / Cloudflare (aucun port ouvert). Les liens de partage, `.m3u` VLC et QR codes
+  suivent automatiquement `X-Forwarded-Proto` / `X-Forwarded-Host`, et un avertissement
+  s'affiche si le lien reste en adresse privée (`localhost`, `192.168.x.x`, `10.x.x.x`…).
+- 🚀 **Démarrage guidé** : scan automatique à la création/modification d'une bibliothèque,
+  assistant sur l'accueil quand 0 média est indexé, rappel de première connexion sur la page
+  de login tant que `admin` / `changeme` est actif.
+
+---
+
 ## Fonctionnalités
 
 - Bibliothèques **Films / Séries / Musique** (chemin + type)
+- **Explorateur NAS/USB** dans la modale Bibliothèque (chemins File Station acceptés)
 - **Multi-utilisateurs** + ACL par bibliothèque
 - **Analyse ffprobe** : vrais codecs, **DTS / DTS-HD / TrueHD / AC-3 / 5.1 / 7.1 / HDR** détectés et mis en cache
 - Lecture HTML5 + **HTTP Range** (seek) + **ETag / If-Range**
@@ -232,9 +253,9 @@ Identiques à la section [Variables d’environnement](#variables-denvironnement
 
 ```bash
 npm ci
-npm test          # 92 tests
+npm test          # 122 tests
 npm run build
-npm run spk       # -> dist-spk/nas-simple-media-1.3.0-geminilake.spk
+npm run spk       # -> dist-spk/nas-simple-media-1.5.0-geminilake.spk
 ```
 
 Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié sur
@@ -242,19 +263,42 @@ Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié 
 
 ---
 
-## Accès distant (Bouygues / CGNAT)
+## Accès distant (Internet / 4G / 5G)
 
-Souvent **pas** de port-forward fiable (CGNAT). Ce projet **ne documente pas** le port-forwarding.
+Le serveur détecte **tout seul** l'adresse à mettre dans les liens de partage : URL locale
+(`http://<ip-lan>:8096`), `PUBLIC_BASE_URL` et en-têtes de proxy inversé
+(`X-Forwarded-Proto`, `X-Forwarded-Host`, `Forwarded`). Un guide pas-à-pas est intégré dans
+l'interface : **Administration → 🌐 Accès externe**. Trois options :
 
-### Tailscale (recommandé)
+### Option 1 — DDNS Synology `*.synology.me` + Proxy inversé DSM (recommandé)
 
-1. Tailscale sur le NAS + clients.
-2. `http://100.x.y.z:8096` — optionnel `tailscale serve --bg 8096`.
-3. `PUBLIC_BASE_URL` = URL Tailscale (liens partage + VLC corrects).
+HTTPS gratuit (Let's Encrypt), le port 8096 n'est **jamais** exposé à Internet.
 
-### Cloudflare Tunnel
+1. Panneau de configuration → Accès externe → **DDNS** → Synology, `mon-nas.synology.me`.
+2. Panneau de configuration → Portail de connexion → Avancé → **Proxy inversé** :
+   source `HTTPS` / `mon-nas.synology.me` / `443` → destination `HTTP` / `localhost` / `8096`.
+3. Sécurité → **Certificat** (Let's Encrypt) affecté au service proxy inversé.
+4. Box : rediriger `443` (et `80` pour le renouvellement du certificat) vers le NAS.
+5. Dans l'UI : coller `https://mon-nas.synology.me` → **Enregistrer** → **📱 Tester / QR Code**.
 
-Tunnel → `http://127.0.0.1:8096`, hostname public, `PUBLIC_BASE_URL` adapté. Zero Trust recommandé.
+### Option 2 — Ouverture de port sur la Box (NAT/PAT 8096)
+
+Box → NAT/PAT : port externe `8096` → IP locale du NAS (`TCP`), puis utiliser
+`http://<ip-publique>:8096` (l'IP publique est détectée par le panneau réseau). Trafic HTTP
+en clair : à éviter hors test. Si le port 8096 est exposé directement, `TRUST_PROXY=0`
+empêche qu'un client forge les en-têtes `X-Forwarded-*`.
+
+### Option 3 — Sans ouvrir de port (Tailscale / Cloudflare Tunnel)
+
+Souvent la seule solution avec le **CGNAT** (Bouygues, Free…) :
+
+- **Tailscale** : paquet Tailscale sur le NAS, `tailscale serve --bg https / http://127.0.0.1:8096`
+  → `https://mon-nas.<tailnet>.ts.net` dans `PUBLIC_BASE_URL`.
+- **Cloudflare Tunnel** : `cloudflared tunnel --url http://localhost:8096` (essai) ou tunnel
+  nommé + domaine → `PUBLIC_BASE_URL` adapté. Zero Trust recommandé.
+
+Les liens générés alors utilisent automatiquement l'adresse externe ; s'ils restent en adresse
+privée, la modale de partage affiche un avertissement avec un bouton **Configurer l'adresse externe**.
 
 ---
 
@@ -266,7 +310,8 @@ Tunnel → `http://127.0.0.1:8096`, hostname public, `PUBLIC_BASE_URL` adapté. 
 | `DATA_PATH` | `/data` | SQLite + caches (transcode, miniatures, sous-titres) |
 | `PORT` | `8096` | Port HTTP |
 | `ADMIN_PASSWORD` | `changeme` | Mot de passe initial `admin` |
-| `PUBLIC_BASE_URL` | `http://localhost:8096` | Base des liens partage / VLC |
+| `PUBLIC_BASE_URL` | `http://localhost:8096` | Base des liens partage / VLC (ex. `https://mon-nas.synology.me`) |
+| `TRUST_PROXY` | `1` | `0` pour ignorer `X-Forwarded-Proto`/`Host` (port 8096 exposé directement) |
 | `ENABLE_WATCH` | `1` | `0` pour couper le file watch |
 | `TRANSCODE_ENABLED` | `true` | Active le mode Compatible (HLS) |
 | `FFMPEG_PATH` | `ffmpeg` | Binaire ffmpeg |

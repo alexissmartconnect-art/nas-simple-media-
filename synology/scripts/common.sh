@@ -182,9 +182,15 @@ PORT=${APP_PORT}
 # Initial administrator password; user "admin" is created on first start.
 ADMIN_PASSWORD=changeme
 
-# Public base URL used to build share links and VLC stream URLs,
-# e.g. http://192.168.1.50:8096 or https://media.example.com
+# Public base URL used to build share links, VLC stream URLs and QR codes,
+# e.g. http://192.168.1.50:8096 or https://mon-nas.synology.me
+# Can also be set from the UI: Administration -> "Acces externe & Reseau".
 PUBLIC_BASE_URL=http://localhost:${APP_PORT}
+
+# Trust reverse-proxy headers (X-Forwarded-Proto / X-Forwarded-Host / Forwarded)
+# set by the DSM Reverse Proxy, Cloudflare Tunnel, Tailscale or nginx.
+# Set to 0 only if port ${APP_PORT} is exposed directly to the Internet.
+TRUST_PROXY=1
 
 # "Compatible" mode transcodes to HLS with ffmpeg. Disable to save CPU.
 TRANSCODE_ENABLED=true

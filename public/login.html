@@ -26,6 +26,7 @@
       </div>
       <p class="error hidden" id="error"></p>
       <button class="btn btn-primary" type="submit" style="width:100%">Se connecter</button>
+      <p class="muted first-run-hint hidden" id="firstRunHint"></p>
     </form>
   </div>
   <script>
@@ -36,6 +37,18 @@
       try {
         const me = await fetch('/api/me').then(r => r.json());
         if (me.authenticated) location.href = '/';
+      } catch {}
+      // First run: tell the owner (quietly) that the default account is still active.
+      try {
+        const setup = await fetch('/api/setup/status').then(r => r.json());
+        if (setup && setup.defaultAdminActive) {
+          const hint = document.getElementById('firstRunHint');
+          hint.innerHTML =
+            'Première connexion : identifiant <strong>' +
+            String(setup.defaultAdminUser || 'admin') +
+            '</strong>, mot de passe <strong>changeme</strong> — pensez à le changer une fois connecté (🔑 Mot de passe).';
+          hint.classList.remove('hidden');
+        }
       } catch {}
     })();
     document.getElementById('loginForm').addEventListener('submit', async (e) => {

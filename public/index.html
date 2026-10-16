@@ -28,6 +28,7 @@
         <nav class="nav admin-only hidden" id="adminNav">
           <button type="button" data-view="admin-libs"><span class="nicon">📚</span>Bibliothèques</button>
           <button type="button" data-view="admin-users"><span class="nicon">👥</span>Comptes</button>
+          <button type="button" data-view="admin-network"><span class="nicon">🌐</span>Accès externe</button>
           <button type="button" data-view="admin-sessions"><span class="nicon">⚙️</span>Sessions</button>
         </nav>
       </div>
@@ -211,6 +212,17 @@
         <label for="sharePassword">Mot de passe (optionnel)</label>
         <input id="sharePassword" type="password" />
       </div>
+      <div class="warn-box hidden" id="sharePrivateWarn">
+        <strong>⚠️ Ce lien utilise une adresse locale</strong>
+        <p class="muted" id="sharePrivateWarnText">
+          Il ne fonctionnera que sur le Wi-Fi local (<code>localhost</code>, <code>192.168.x.x</code>,
+          <code>10.x.x.x</code>…). Pour partager hors de chez vous, configurez d’abord votre adresse
+          externe.
+        </p>
+        <button class="btn btn-sm btn-primary" id="shareConfigureExternal" type="button">
+          🌐 Configurer l’adresse externe
+        </button>
+      </div>
       <p class="error hidden" id="shareError"></p>
       <p class="ok hidden" id="shareResult"></p>
       <div class="qr-box hidden" id="shareQrBox">
@@ -314,13 +326,36 @@
         </select>
       </div>
       <div class="field">
-        <label for="lPath">Chemin (relatif à MEDIA_PATH ou absolu)</label>
-        <input id="lPath" type="text" placeholder="Movies" />
+        <label for="lPath">Chemin du dossier</label>
+        <input id="lPath" type="text" placeholder="Movies — ou cliquez sur un dossier ci-dessous" />
+        <p class="muted field-help">
+          Relatif à MEDIA_PATH, absolu, ou chemin File Station (<code>/usbshare1/Films</code>,
+          <code>/usbshare1-2/Films</code>, <code>/video/Films</code>) résolu automatiquement.
+        </p>
+      </div>
+      <div class="field">
+        <label>📁 Parcourir les dossiers du NAS / USB</label>
+        <div class="explorer" id="libExplorer">
+          <div class="explorer-quick" id="fsQuick"></div>
+          <div class="explorer-bar">
+            <button class="btn btn-sm" id="fsUp" type="button" title="Dossier parent">⬆ Parent</button>
+            <input id="fsPath" type="text" readonly placeholder="Détection des volumes…" />
+            <span class="badge" id="fsMediaCount">0 média</span>
+          </div>
+          <div class="explorer-list" id="fsList"></div>
+          <div class="explorer-actions">
+            <button class="btn btn-sm btn-primary" id="fsUse" type="button">✓ Utiliser ce dossier</button>
+            <button class="btn btn-sm" id="fsHome" type="button">🏠 MEDIA_PATH</button>
+            <button class="btn btn-sm" id="fsRefresh" type="button" title="Relire le dossier">⟳ Actualiser</button>
+          </div>
+          <p class="muted explorer-hint hidden" id="fsHint"></p>
+        </div>
       </div>
       <div class="field">
         <label><input type="checkbox" id="lEnabled" checked /> Active</label>
       </div>
       <p class="error hidden" id="libError"></p>
+      <p class="ok hidden" id="libScanResult"></p>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="libCancel" type="button">Annuler</button>
         <button class="btn btn-primary" id="libSave" type="button">Enregistrer</button>
