@@ -14,8 +14,13 @@ APP_PORT="8096"
 # <pkgroot>/target/app/bin/run.sh
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 APPDIR="$(dirname "${SELF_DIR}")"
-PKGROOT="$(dirname "$(dirname "${APPDIR}")")"
-VAR_DIR="${PKGROOT}/var"
+_candidate_root="$(dirname "$(dirname "${APPDIR}")")"
+if [ -d "/var/packages/${PKGNAME}" ] && [ ! -d "${_candidate_root}/var" ]; then
+  PKGROOT="/var/packages/${PKGNAME}"
+else
+  PKGROOT="${_candidate_root}"
+fi
+VAR_DIR="${SYNOPKG_PKGVAR:-${PKGROOT}/var}"
 ETC_DIR="${PKGROOT}/etc"
 ENVFILE="${ETC_DIR}/${PKGNAME}.env"
 PIDFILE="${VAR_DIR}/${PKGNAME}.pid"
@@ -42,15 +47,20 @@ if [ -f "${ENVFILE}" ]; then
 fi
 
 # --- defaults ----------------------------------------------------------------
+if [ -d "/var/packages/ffmpeg6/target/bin" ]; then
+  PATH="/var/packages/ffmpeg6/target/bin:${PATH}"
+  export PATH
+fi
 : "${MEDIA_PATH:=/volume1}"
 : "${DATA_PATH:=${VAR_DIR}}"
 : "${PORT:=${APP_PORT}}"
 : "${TRANSCODE_ENABLED:=true}"
 : "${FFMPEG_PATH:=ffmpeg}"
+: "${FFPROBE_PATH:=ffprobe}"
 : "${TRANSCODE_MAX_JOBS:=1}"
 : "${NODE_ENV:=production}"
 
-export MEDIA_PATH DATA_PATH PORT TRANSCODE_ENABLED FFMPEG_PATH TRANSCODE_MAX_JOBS NODE_ENV
+export MEDIA_PATH DATA_PATH PORT TRANSCODE_ENABLED FFMPEG_PATH FFPROBE_PATH TRANSCODE_MAX_JOBS NODE_ENV
 
 # --- locate node -------------------------------------------------------------
 NODE_BIN=""

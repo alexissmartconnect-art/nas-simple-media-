@@ -13,7 +13,7 @@ start() {
     return 0
   fi
 
-  [ -x "${APPDIR}/dist/index.js" ] || die "application not installed at ${APPDIR}"
+  [ -f "${APPDIR}/dist/index.js" ] || die "application not installed at ${APPDIR}"
 
   NODE_BIN="$(find_node)" || die "no Node.js runtime found. Install the Synology 'Node.js v22' package."
   if ! node_is_supported "${NODE_BIN}"; then
@@ -24,9 +24,15 @@ start() {
   ensure_dirs
   chown_to_service
 
-  # Start detached, as the service user, stdin closed, output appended.
-  nohup su -s /bin/sh "${SERVICE_USER}" -c "exec ${APPDIR}/bin/run.sh" \
-    >>"${LOGFILE}" 2>&1 </dev/null &
+  # Start detached, as the service user sc-nas-simple-media, stdin closed, output appended.
+  # On DSM 7 Package Center already runs this script as sc-nas-simple-media.
+  if [ "$(id -u 2>/dev/null)" = "0" ]; then
+    nohup su -s /bin/sh "${SERVICE_USER}" -c "exec ${APPDIR}/bin/run.sh" \
+      >>"${LOGFILE}" 2>&1 </dev/null &
+  else
+    nohup "${APPDIR}/bin/run.sh" \
+      >>"${LOGFILE}" 2>&1 </dev/null &
+  fi
 
   # Wait for run.sh to publish its PID.
   _i=0

@@ -9,11 +9,20 @@ SERVICE_USER="sc-nas-simple-media"
 SERVICE_GROUP="sc-nas-simple-media"
 APP_PORT="8096"
 
-# DSM sets SYNOPKG_PKGDEST to /var/packages/<pkg>; fall back for manual testing.
-PKGROOT="${SYNOPKG_PKGDEST:-/var/packages/${PKGNAME}}"
-TARGET_DIR="${PKGROOT}/target"
+# DSM sets SYNOPKG_PKGDEST to /var/packages/<pkg>/target (i.e. /volumeX/@appstore/<pkg>);
+# fall back cleanly for manual testing outside DSM.
+if [ -d "/var/packages/${PKGNAME}" ]; then
+  PKGROOT="/var/packages/${PKGNAME}"
+  TARGET_DIR="${SYNOPKG_PKGDEST:-${PKGROOT}/target}"
+elif [ -n "${SYNOPKG_PKGDEST:-}" ] && [ -d "${SYNOPKG_PKGDEST}/app" ] && [ ! -d "${SYNOPKG_PKGDEST}/target" ]; then
+  PKGROOT="${SYNOPKG_PKGDEST}"
+  TARGET_DIR="${SYNOPKG_PKGDEST}"
+else
+  PKGROOT="${SYNOPKG_PKGDEST:-/var/packages/${PKGNAME}}"
+  TARGET_DIR="${PKGROOT}/target"
+fi
 APPDIR="${TARGET_DIR}/app"
-VAR_DIR="${PKGROOT}/var"
+VAR_DIR="${SYNOPKG_PKGVAR:-${PKGROOT}/var}"
 ETC_DIR="${PKGROOT}/etc"
 TMP_DIR="${PKGROOT}/tmp"
 PIDFILE="${VAR_DIR}/${PKGNAME}.pid"
@@ -82,6 +91,26 @@ find_ffmpeg() {
   echo "${_found}"
 }
 
+# Locate ffprobe alongside ffmpeg for media probing (DTS / 5.1 / HDR detection).
+find_ffprobe() {
+  _found=""
+  for _candidate in \
+    /var/packages/ffmpeg6/target/bin/ffprobe \
+    /var/packages/ffmpeg7/target/bin/ffprobe \
+    /volume*/@appstore/ffmpeg*/target/bin/ffprobe \
+    /usr/bin/ffprobe \
+    /usr/local/bin/ffprobe \
+    /bin/ffprobe
+  do
+    if [ -n "${_candidate}" ] && [ -x "${_candidate}" ]; then
+      _found="${_candidate}"
+      break
+    fi
+  done
+  [ -n "${_found}" ] || return 1
+  echo "${_found}"
+}
+
 # Print "<major> <minor>" for the given node binary.
 node_version() {
   _node="$1"
@@ -103,11 +132,13 @@ node_is_supported() {
 # ---------------------------------------------------------------- directories
 
 ensure_dirs() {
-  mkdir -p "${VAR_DIR}" "${ETC_DIR}" "${TMP_DIR}" "${APPDIR}"
+  mkdir -p "${VAR_DIR}" "${ETC_DIR}" "${TMP_DIR}" "${APPDIR}" 2>/dev/null || true
 }
 
 chown_to_service() {
-  chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${VAR_DIR}" "${ETC_DIR}" "${TMP_DIR}" 2>/dev/null || true
+  if [ "$(id -u 2>/dev/null)" = "0" ]; then
+    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${VAR_DIR}" "${ETC_DIR}" "${TMP_DIR}" 2>/dev/null || true
+  fi
 }
 
 # ---------------------------------------------------------------- environment
@@ -132,6 +163,7 @@ write_env_file() {
 
   _media="$(default_media_path)"
   _ffmpeg="$(find_ffmpeg || true)"
+  _ffprobe="$(find_ffprobe || true)"
 
   cat > "${ENVFILE}" <<EOF
 # nas-simple-media runtime configuration
@@ -157,6 +189,7 @@ PUBLIC_BASE_URL=http://localhost:${APP_PORT}
 # "Compatible" mode transcodes to HLS with ffmpeg. Disable to save CPU.
 TRANSCODE_ENABLED=true
 FFMPEG_PATH=${_ffmpeg:-ffmpeg}
+FFPROBE_PATH=${_ffprobe:-ffprobe}
 TRANSCODE_MAX_JOBS=1
 
 # SQLite backend: leave empty to auto-select (node:sqlite, else better-sqlite3).

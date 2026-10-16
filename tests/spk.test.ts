@@ -103,15 +103,20 @@ describe('DSM 7 privilege configuration', () => {
     assert.equal(privilege.groupname, 'sc-nas-simple-media');
   });
 
-  it('keeps lifecycle scripts running as root', () => {
+  it('never requests root privileges (disallowed for third-party DSM 7 packages)', () => {
     const privilege = JSON.parse(
       fs.readFileSync(path.join(SYNO_DIR, 'conf', 'privilege'), 'utf8')
     ) as {
+      defaults: { 'run-as': string };
       'ctrl-script'?: Array<{ action: string; 'run-as': string }>;
+      executable?: Array<{ relpath: string; 'run-as': string }>;
     };
-    const actions = new Map((privilege['ctrl-script'] ?? []).map((c) => [c.action, c['run-as']]));
-    for (const action of ['preinst', 'postinst', 'preuninst', 'postuninst', 'start', 'stop']) {
-      assert.equal(actions.get(action), 'root', `${action} must run as root`);
+    assert.equal(privilege.defaults['run-as'], 'package');
+    for (const c of privilege['ctrl-script'] ?? []) {
+      assert.notEqual(c['run-as'], 'root', `${c.action} must not run as root on DSM 7`);
+    }
+    for (const e of privilege.executable ?? []) {
+      assert.notEqual(e['run-as'], 'root', `${e.relpath} must not run as root on DSM 7`);
     }
   });
 });
