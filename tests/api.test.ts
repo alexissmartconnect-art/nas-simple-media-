@@ -456,6 +456,26 @@ describe('security, scanner, shares, HLS helpers & HTTP API', () => {
     fs.rmSync(path.join(mediaRoot, 'RootMovie.mp4'), { force: true });
   });
 
+  it('restricts read-only Tailscale diagnostics to admins', async () => {
+    const endpoint = `${baseUrl}/api/admin/network/tailscale`;
+    assert.equal((await fetch(endpoint)).status, 401);
+    const { createUser, deleteUser } = await import('../src/users/users');
+    const { createSession } = await import('../src/auth/session');
+    const user = createUser({ username: 'diagnostic-user', password: 'long-test-password', role: 'user', can_share: false });
+    try {
+      const token = createSession(user);
+      assert.equal((await fetch(endpoint, { headers: { Cookie: `nas_sm_session=${token}` } })).status, 403);
+      const response = await fetch(endpoint, { headers: { Cookie: await adminCookie() } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const data = await response.json() as any;
+      assert.equal(data.readOnly, true);
+      assert.ok(Array.isArray(data.checks));
+      assert.equal(data.checks.find((c: any) => c.id === 'permissions').status, 'unknown');
+      assert.equal((await fetch(endpoint, { method: 'POST', headers: { Cookie: await adminCookie() } })).status, 404);
+    } finally { deleteUser(user.id); }
+  });
+
   it('uses the reverse proxy headers for share links, VLC and QR codes', async () => {
     const cookie = await adminCookie();
     const external = { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'mon-nas.synology.me' };

@@ -57,6 +57,7 @@ import {
 } from '../libraries/libraries';
 import { listServerDirectory } from '../fs/explorer';
 import { describeNetwork, publicIpInfo } from '../net/network';
+import { tailscaleDiagnostic } from '../net/tailscale';
 import {
   createStreamToken,
   resolveStreamToken,
@@ -1098,6 +1099,16 @@ apiRouter.get('/admin/fs', requireAuth, requireAdmin, (req, res) => {
 /** Local URL, configured public URL, reverse-proxy detection + French setup guide. */
 apiRouter.get('/admin/network', requireAuth, requireAdmin, (req, res) => {
   res.json(describeNetwork(req));
+});
+
+/** Read-only, bounded Tailscale diagnostics; never activate Funnel from this route. */
+apiRouter.get('/admin/network/tailscale', requireAuth, requireAdmin, async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json(await tailscaleDiagnostic(config.PORT));
+  } catch {
+    res.status(500).json({ error: 'Diagnostic Tailscale indisponible. Aucune configuration n’a été modifiée.' });
+  }
 });
 
 /** Best-effort public IP detection (used by the "Option 2 — NAT" guide step). */

@@ -120,15 +120,16 @@ export const EXTERNAL_ACCESS_GUIDE: ExternalAccessStep[] = [
     id: 'tunnel',
     title: 'Option 3 — Sans ouvrir de port (Tailscale / Cloudflare Tunnel)',
     summary:
-      'Aucune ouverture sur la Box : idéal si votre opérateur bloque les ports ou si vous ne voulez rien exposer.',
+      'Aucune ouverture sur la Box. Attention : Funnel et les tunnels publics rendent le service accessible sur Internet.',
     steps: [
-      'Tailscale : installez le paquet Tailscale (SynoCommunity) dans le Centre de paquets, puis en SSH : sudo tailscale up --hostname=mon-nas.',
-      'Tailscale : publiez le service en HTTPS avec : sudo tailscale serve --bg https / http://127.0.0.1:8096 (ou tailscale cert mon-nas.<votre-tailnet>.ts.net).',
+      'Tailscale : installez le paquet officiel pour Synology et connectez le NAS à votre compte. Utilisez « Vérifier Tailscale » ci-dessus avant toute configuration.',
+      'Tailscale Serve reste privé et nécessite Tailscale chez les invités. Pour un accès public sans installation : Funnel, après validation HTTPS/Funnel dans votre compte (limites de débit applicables).',
+      'Funnel, configuration manuelle par un administrateur uniquement : sudo /var/packages/Tailscale/target/bin/tailscale funnel --bg http://127.0.0.1:8096. Cette commande publie le service ; vérifiez d’abord les comptes et mots de passe.',
       'Cloudflare Tunnel : installez cloudflared, puis cloudflared tunnel --url http://localhost:8096 pour un essai rapide, ou créez un tunnel nommé relié à votre domaine.',
       'Collez ici l’URL HTTPS obtenue (ex. https://mon-nas.tailnet-xxxx.ts.net ou https://media.mondomaine.fr) puis cliquez sur « Enregistrer » et « Tester / QR Code ».',
     ],
     result:
-      'Aucun port n’est ouvert sur la Box : le tunnel chiffre le trafic et transmet l’en-tête X-Forwarded-Host, donc les liens de partage pointent bien vers l’adresse publique.',
+      'Aucune redirection sur la Box. Enregistrez l’adresse externe puis testez en 4G/5G, Wi-Fi et Tailscale désactivés. Les comptes de l’application protègent les bibliothèques ; ne partagez jamais votre compte administrateur.',
   },
 ];
 
