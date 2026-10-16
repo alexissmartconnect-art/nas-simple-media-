@@ -94,6 +94,7 @@ import {
   listContinueWatching,
   listRecentlyAdded,
 } from '../playback/progress';
+import { parseMediaSort, parseSortOrder, buildMediaOrderBy } from './mediaSort';
 import fs from 'fs';
 import path from 'path';
 
@@ -288,12 +289,13 @@ apiRouter.get('/media', requireAuth, (req, res) => {
   }
 
   const whereSql = `WHERE ${where.join(' AND ')}`;
+  const sortKey = parseMediaSort(req.query.sort);
+  const sortOrder = parseSortOrder(req.query.order, sortKey);
+  const orderBy = buildMediaOrderBy(sortKey, sortOrder);
   const items = db
     .prepare(
       `SELECT * FROM media_items ${whereSql}
-       ORDER BY
-         CASE kind WHEN 'series' THEN show_name WHEN 'music' THEN artist ELSE title END,
-         season, episode, album, track_num, title
+       ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`
     )
     .all(...params, limit, offset) as MediaItem[];
@@ -302,7 +304,7 @@ apiRouter.get('/media', requireAuth, (req, res) => {
     db.prepare(`SELECT COUNT(*) as c FROM media_items ${whereSql}`).get(...params) as { c: number }
   ).c;
 
-  res.json({ items, total, limit, offset });
+  res.json({ items, total, limit, offset, sort: sortKey, order: sortOrder });
 });
 
 /**

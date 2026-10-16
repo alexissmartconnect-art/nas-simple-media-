@@ -1,3 +1,15 @@
+## NAS Simple Media 1.4.0 — paquet natif DSM 7 pour Synology DS220+
+
+### Nouveautés 1.4.0 — interface « Plex like »
+
+- **Sidebar** façon Plex : Accueil, Bibliothèques (+ compteurs), Partages, Admin
+- Rails d'accueil **Reprendre** / **Récemment ajoutés**, posters 2:3 avec
+  barre de progression et badge « NOUVEAU »
+- Page détail **preplay** : backdrop flouté, poster, badges codecs, reprise proposée
+- **Lecteur cinéma** plein écran (OSD auto-masqué), navigation chapitres
+- **Tri Films** : Titre A→Z / Z→A, Ajoutés récemment, Plus volumineux
+- Thème sombre + accent orange, responsive mobile (sidebar off-canvas)
+
 ## NAS Simple Media 1.3.0 — paquet natif DSM 7 pour Synology DS220+
 
 Paquet **natif** (sans Docker) ciblant la **DS220+** — arch `geminilake`, DSM 7.x,

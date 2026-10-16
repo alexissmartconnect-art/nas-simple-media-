@@ -27,6 +27,8 @@
     pendingResumeMs: 0,
     lastProgressSent: 0,
     sessionsTimer: null,
+    sort: 'title',
+    order: 'asc',
   };
 
   const $ = (id) => document.getElementById(id);
@@ -178,24 +180,72 @@
       state.library = null;
       state.drill = null;
     }
-    document.querySelectorAll('#nav button').forEach((b) => {
-      b.classList.toggle('active', b.dataset.view === view);
-    });
+    syncSidebarActive();
     $('searchRow').classList.toggle('hidden', view.startsWith('admin') || view === 'shares');
     if (state.sessionsTimer) {
       clearInterval(state.sessionsTimer);
       state.sessionsTimer = null;
     }
+    document.body.classList.remove('side-open');
+    render();
+  }
+
+  function syncSidebarActive() {
+    document.querySelectorAll('.sidebar .nav button').forEach((b) => {
+      const isLibBtn = b.hasAttribute('data-lib-nav');
+      if (isLibBtn) {
+        b.classList.toggle(
+          'active',
+          state.view === 'browse' && !!state.library && Number(b.getAttribute('data-lib-nav')) === state.library.id
+        );
+      } else {
+        b.classList.toggle(
+          'active',
+          b.dataset.view === state.view && (state.view !== 'browse' || !state.library)
+        );
+      }
+    });
+  }
+
+  function selectLibrary(id) {
+    const lib = state.libraries.find((l) => l.id === id);
+    if (!lib) return;
+    state.view = 'browse';
+    state.library = lib;
+    state.drill = null;
+    state.folderPath = '';
+    $('searchRow').classList.remove('hidden');
+    document.body.classList.remove('side-open');
+    syncSidebarActive();
     render();
   }
 
   async function loadLibraries() {
     const data = await api('/api/libraries');
     state.libraries = data.libraries || [];
+    renderSidebarLibs();
+  }
+
+  function renderSidebarLibs() {
+    const nav = $('libNav');
+    if (!nav) return;
+    nav.innerHTML = (state.libraries || [])
+      .map(
+        (l) => `<button type="button" data-lib-nav="${l.id}" title="${escapeAttr(l.name)}">
+          <span class="nicon">${iconFor(l.type)}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(l.name)}</span>
+          <span class="ncount">${l.item_count}</span>
+        </button>`
+      )
+      .join('');
+    nav.querySelectorAll('[data-lib-nav]').forEach((btn) => {
+      btn.addEventListener('click', () => selectLibrary(Number(btn.getAttribute('data-lib-nav'))));
+    });
+    syncSidebarActive();
   }
 
   async function render() {
     content.innerHTML = '<p class="muted">Chargement…</p>';
+    syncSidebarActive();
     try {
       if (state.view === 'shares') {
         sectionTitle.textContent = 'Mes liens de partage';
@@ -243,7 +293,7 @@
         content.innerHTML =
           crumb([
             [
-              'Bibliothèques',
+              'Accueil',
               () => {
                 $('search').value = '';
                 state.q = '';
@@ -264,44 +314,27 @@
       let homeRows = '';
       try {
         const [cw, ra] = await Promise.all([
-          api('/api/continue-watching?limit=10').catch(() => ({ items: [] })),
-          api('/api/recently-added?limit=10').catch(() => ({ items: [] })),
+          api('/api/continue-watching?limit=12').catch(() => ({ items: [] })),
+          api('/api/recently-added?limit=12').catch(() => ({ items: [] })),
         ]);
         if (cw.items && cw.items.length) {
-          homeRows += `<div class="home-row"><h3>▶ Reprendre</h3>${cardsHtml(cw.items, { progress: true })}</div>`;
+          homeRows += `<div class="home-row"><h3>▶ Reprendre <span class="rail-count">${cw.items.length}</span></h3>${cardsHtml(cw.items, { progress: true, rail: true })}</div>`;
           state.visibleItems = state.visibleItems.concat(cw.items);
         }
         if (ra.items && ra.items.length) {
-          homeRows += `<div class="home-row"><h3>✨ Récemment ajoutés</h3>${cardsHtml(ra.items)}</div>`;
+          homeRows += `<div class="home-row"><h3>✨ Récemment ajoutés <span class="rail-count">${ra.items.length}</span></h3>${cardsHtml(ra.items, { rail: true })}</div>`;
           state.visibleItems = state.visibleItems.concat(ra.items);
         }
       } catch {}
       content.innerHTML =
         homeRows +
-        `<div class="home-row"><h3>Bibliothèques</h3><div class="grid">${state.libraries
-          .map(
-            (l) => `<article class="card" data-lib="${l.id}">
-          <div class="thumb"><span class="thumb-icon">${iconFor(l.type)}</span></div>
-          <div>
-            <div class="title">${escapeHtml(l.name)}</div>
-            <div class="meta">${escapeHtml(l.type)} · ${l.item_count} média(s)</div>
-            ${
-              canShare()
-                ? `<div class="card-actions"><button class="btn btn-sm btn-lib-share" type="button">🔗 Partager</button></div>`
-                : ''
-            }
-          </div>
-        </article>`
-          )
+        `<div class="home-row"><h3>Bibliothèques <span class="rail-count">${state.libraries.length}</span></h3><div class="grid">${state.libraries
+          .map((l) => libTileHtml(l))
           .join('')}</div></div>`;
       bindCards();
       content.querySelectorAll('[data-lib]').forEach((el) => {
         el.addEventListener('click', () => {
-          const id = Number(el.getAttribute('data-lib'));
-          state.library = state.libraries.find((l) => l.id === id);
-          state.drill = null;
-          state.folderPath = '';
-          render();
+          selectLibrary(Number(el.getAttribute('data-lib')));
         });
       });
       content.querySelectorAll('.btn-lib-share').forEach((btn) => {
@@ -324,15 +357,20 @@
     if (lib.type === 'movies') {
       sectionTitle.textContent = lib.name;
       const data = await api(
-        `/api/media?library_id=${lib.id}&limit=500` + (state.q ? '&q=' + encodeURIComponent(state.q) : '')
+        `/api/media?library_id=${lib.id}&limit=500&sort=${state.sort}&order=${state.order}` +
+          (state.q ? '&q=' + encodeURIComponent(state.q) : '')
       );
       state.visibleItems = data.items || [];
       content.innerHTML =
-        crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
+        `<div class="lib-head">` +
+        crumb([['Accueil', () => { setView('browse'); }], [lib.name]]) +
+        sortSelectHtml() +
         viewToggleHtml() +
+        `</div>` +
         cardsHtml(state.visibleItems);
       bindCards();
       bindViewToggle();
+      bindSortSelect();
       return;
     }
 
@@ -347,23 +385,20 @@
         }
         state.visibleItems = [];
         content.innerHTML =
-          crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
+          `<div class="lib-head">` +
+          crumb([['Accueil', () => { setView('browse'); }], [lib.name]]) +
           viewToggleHtml() +
+          `</div>` +
           (shows.length
             ? `<div class="grid">${shows
-                .map(
-                  (s) => `<article class="card" data-show="${escapeAttr(s.name)}">
-                <div class="thumb">📺</div>
-                <div>
-                  <div class="title">${escapeHtml(s.name)}</div>
-                  <div class="meta">${s.seasons} saison(s) · ${s.episodes} ép.</div>
-                  ${
-                    canShare()
-                      ? `<div class="card-actions"><button class="btn btn-sm btn-show-share" type="button">🔗 Partager</button></div>`
-                      : ''
-                  }
-                </div>
-              </article>`
+                .map((s) =>
+                  tileHtml({
+                    attr: `data-show="${escapeAttr(s.name)}"`,
+                    icon: '📺',
+                    title: s.name,
+                    sub: `${s.seasons} saison(s) · ${s.episodes} ép.`,
+                    shareCls: 'btn-show-share',
+                  })
                 )
                 .join('')}</div>`
             : emptyMsg('Aucun épisode. Ajoutez des fichiers puis Rescan (admin).'));
@@ -395,12 +430,14 @@
       );
       state.visibleItems = data.items || [];
       content.innerHTML =
+        `<div class="lib-head">` +
         crumb([
-          ['Bibliothèques', () => { state.library = null; state.drill = null; render(); }],
+          ['Accueil', () => { setView('browse'); }],
           [lib.name, () => { state.drill = null; render(); }],
           [state.drill],
         ]) +
         viewToggleHtml() +
+        `</div>` +
         groupedSeriesHtml(state.visibleItems);
       bindListActions();
       bindViewToggle();
@@ -419,25 +456,23 @@
       }
       state.visibleItems = [];
       content.innerHTML =
-        crumb([['Bibliothèques', () => { state.library = null; render(); }], [lib.name]]) +
+`<div class="lib-head">` +
+        crumb([['Accueil', () => { setView('browse'); }], [lib.name]]) +
         viewToggleHtml() +
-        (artists.length
-          ? `<div class="grid">${artists
-              .map(
-                (a) => `<article class="card" data-artist="${escapeAttr(a.name)}">
-              <div class="thumb">🎵</div>
-              <div>
-                <div class="title">${escapeHtml(a.name)}</div>
-                <div class="meta">${a.albums} album(s) · ${a.tracks} pistes</div>
-                ${
-                  canShare()
-                    ? `<div class="card-actions"><button class="btn btn-sm btn-artist-share" type="button">🔗 Partager</button></div>`
-                    : ''
-                }
-              </div>
-            </article>`
-              )
-              .join('')}</div>`
+        `</div>` +
+          (artists.length
+            ? `<div class="grid">${artists
+                .map((a) =>
+                  tileHtml({
+                    attr: `data-artist="${escapeAttr(a.name)}"`,
+                    icon: '🎵',
+                    title: a.name,
+                    sub: `${a.albums} album(s) · ${a.tracks} pistes`,
+                    shareCls: 'btn-artist-share',
+                    square: true,
+                  })
+                )
+                .join('')}</div>`
           : emptyMsg('Aucune musique. Ajoutez des fichiers puis Rescan (admin).'));
       bindViewToggle();
       content.querySelectorAll('[data-artist]').forEach((el) => {
@@ -467,12 +502,14 @@
     );
     state.visibleItems = data.items || [];
     content.innerHTML =
+      `<div class="lib-head">` +
       crumb([
-        ['Bibliothèques', () => { state.library = null; state.drill = null; render(); }],
+        ['Accueil', () => { setView('browse'); }],
         [lib.name, () => { state.drill = null; render(); }],
         [state.drill],
       ]) +
       viewToggleHtml() +
+      `</div>` +
       groupedMusicHtml(state.visibleItems);
     bindListActions();
     bindViewToggle();
@@ -481,9 +518,33 @@
 
   function viewToggleHtml() {
     return `<div class="view-toggle mode-toggle">
-      <button type="button" class="btn mode-btn ${state.browseMode !== 'folders' ? 'active' : ''}" data-browse="media">Vue Média</button>
-      <button type="button" class="btn mode-btn ${state.browseMode === 'folders' ? 'active' : ''}" data-browse="folders">📁 Par Dossiers</button>
+      <button type="button" class="btn mode-btn ${state.browseMode !== 'folders' ? 'active' : ''}" data-browse="media">Médias</button>
+      <button type="button" class="btn mode-btn ${state.browseMode === 'folders' ? 'active' : ''}" data-browse="folders">📁 Dossiers</button>
     </div>`;
+  }
+
+  function sortSelectHtml() {
+    const v = `${state.sort}:${state.order}`;
+    const opt = (val, label) => `<option value="${val}"${v === val ? ' selected' : ''}>${label}</option>`;
+    return `<label class="sort-wrap">Trier :
+      <select id="sortSel">
+        ${opt('title:asc', 'Titre A → Z')}
+        ${opt('title:desc', 'Titre Z → A')}
+        ${opt('added:desc', 'Ajoutés récemment')}
+        ${opt('size:desc', 'Plus volumineux')}
+      </select>
+    </label>`;
+  }
+
+  function bindSortSelect() {
+    const sel = $('sortSel');
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      const [sort, order] = (sel.value || 'title:asc').split(':');
+      state.sort = sort;
+      state.order = order === 'desc' ? 'desc' : 'asc';
+      render();
+    });
   }
 
   function bindViewToggle() {
@@ -540,25 +601,22 @@
           ? `<button class="btn" id="btnShareFolder" type="button">🔗 Partager la bibliothèque</button>`
           : '';
     const folderCards = (data.subfolders || [])
-      .map(
-        (f) => `<article class="card" data-folder="${escapeAttr(f.path)}">
-        <div class="thumb">📁</div>
-        <div>
-          <div class="title">${escapeHtml(f.name)}</div>
-          <div class="meta">${f.item_count} média(s)</div>
-          ${
-            canShare()
-              ? `<div class="card-actions"><button class="btn btn-sm btn-folder-share" type="button">🔗 Partager</button></div>`
-              : ''
-          }
-        </div>
-      </article>`
+      .map((f) =>
+        tileHtml({
+          attr: `data-folder="${escapeAttr(f.path)}"`,
+          icon: '📁',
+          title: f.name,
+          sub: `${f.item_count} média(s)`,
+          shareCls: 'btn-folder-share',
+        })
       )
       .join('');
     state.visibleItems = data.items || [];
     content.innerHTML =
+      `<div class="lib-head">` +
       crumb(crumbs) +
       viewToggleHtml() +
+      `</div>` +
       `<div class="toolbar">${shareFolderBtn}<span class="muted folder-count">${data.total_in_tree || 0} dans l’arbre</span></div>` +
       (folderCards ? `<div class="grid">${folderCards}</div>` : '') +
       (state.visibleItems.length ? cardsHtml(state.visibleItems) : !folderCards ? emptyMsg('Dossier vide.') : '');
@@ -673,37 +731,73 @@
     if (it.type === 'track') return `<span class="thumb-icon">${icon}</span>`;
     return (
       `<span class="thumb-icon">${icon}</span>` +
-      `<img loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" onerror="this.remove()" />`
+      `<img class="poster-img" loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" onerror="this.remove()" />`
     );
+  }
+
+  /** Plex-style poster tile for libraries / shows / artists / folders. */
+  function tileHtml({ attr, icon, title, sub, shareCls, square }) {
+    const shareBtn = canShare() && shareCls
+      ? `<button class="btn btn-sm ${shareCls}" type="button">🔗 Partager</button>`
+      : '';
+    return `<article class="card${square ? ' square' : ''}" ${attr}>
+      <div class="poster"><span class="thumb-icon">${icon}</span>
+        <div class="p-overlay"><button class="p-play" type="button" tabindex="-1">▶</button></div>
+      </div>
+      <div class="p-meta">
+        <div class="p-title">${escapeHtml(title)}</div>
+        <div class="p-sub">${escapeHtml(sub)}</div>
+        ${shareBtn ? `<div class="card-actions">${shareBtn}</div>` : ''}
+      </div>
+    </article>`;
+  }
+
+  function libTileHtml(l) {
+    const typeLabel = l.type === 'movies' ? 'Films' : l.type === 'series' ? 'Séries' : 'Musique';
+    return tileHtml({
+      attr: `data-lib="${l.id}"`,
+      icon: iconFor(l.type),
+      title: l.name,
+      sub: `${typeLabel} · ${l.item_count} média(s)`,
+      shareCls: 'btn-lib-share',
+    });
   }
 
   function cardsHtml(items, opts = {}) {
     if (!items.length) return emptyMsg('Aucun média dans cette bibliothèque.');
-    return `<div class="grid">${items
+    const wrap = opts.rail ? 'rail' : 'grid';
+    return `<div class="${wrap}">${items
       .map((it) => {
         const ext = extLabel(it.filename);
         const shareBtn = canShare()
-          ? `<button class="btn btn-sm btn-card-share" type="button" title="Partager">Partager</button>`
+          ? `<button class="btn btn-sm btn-card-share" type="button" title="Partager">🔗</button>`
           : '';
-        const progress =
-          opts.progress && it.progress_ratio > 0
-            ? `<div class="progress"><div style="width:${Math.round(it.progress_ratio * 100)}%"></div></div>
-               <div class="meta">${fmtTime(it.position_ms)} / ${fmtTime(it.duration_ms)}</div>`
-            : '';
-        const isVideo = it.type !== 'track';
-        return `<article class="card" data-id="${it.id}">
-          <div class="thumb" style="position:relative;height:104px">
+        const hasProgress = opts.progress && it.progress_ratio > 0;
+        const progressBar = hasProgress
+          ? `<div class="p-progress"><div style="width:${Math.round(it.progress_ratio * 100)}%"></div></div>`
+          : '';
+        let sub = fmtBytes(it.size_bytes);
+        if (hasProgress && it.duration_ms > 0) {
+          const left = Math.max(0, it.duration_ms - it.position_ms);
+          sub = `Reste ${fmtTime(left)}`;
+        } else if (it.type === 'episode' && it.show_name) {
+          sub = `${it.show_name} · S${String(it.season ?? 1).padStart(2, '0')}E${String(it.episode ?? 1).padStart(2, '0')}`;
+        } else if (it.type === 'track' && it.artist) {
+          sub = it.album ? `${it.artist} — ${it.album}` : it.artist;
+        }
+        return `<article class="card" data-id="${it.id}" title="${escapeAttr(it.title)}">
+          <div class="poster">
             ${thumbImg(it, iconFor(it.type))}
             ${ext ? `<span class="ext-badge">${escapeHtml(ext)}</span>` : ''}
+            ${progressBar}
+            <div class="p-overlay"><button class="p-play btn-card-play" type="button" tabindex="-1" title="Lire">▶</button></div>
           </div>
-          <div>
-            <div class="title">${escapeHtml(it.title)}</div>
-            <div class="meta">${fmtBytes(it.size_bytes)}</div>
-            ${progress}
+          <div class="p-meta">
+            <div class="p-title">${escapeHtml(it.title)}</div>
+            <div class="p-sub">${escapeHtml(sub)}</div>
             <div class="card-actions">
-              <button class="btn btn-sm btn-primary btn-card-play" type="button">${isVideo ? 'Détails' : 'Lire'}</button>
               <button class="btn btn-sm btn-card-vlc" type="button" title="Ouvrir dans VLC">VLC</button>
-              <button class="btn btn-sm btn-card-dl" type="button" title="Télécharger">DL</button>
+              <button class="btn btn-sm btn-card-dl" type="button" title="Télécharger">⬇</button>
               ${shareBtn}
             </div>
           </div>
@@ -826,7 +920,13 @@
           ? `<button class="btn btn-share" type="button">Partager</button>`
           : '';
         const isPlaying = state.currentItem && state.currentItem.id === it.id;
+        const rowThumb =
+          it.type === 'track'
+            ? `<div class="row-thumb-fallback">🎵</div>`
+            : `<div class="row-thumb-wrap"><div class="row-thumb-fallback">${iconFor(it.type)}</div>` +
+              `<img class="row-thumb" loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" onerror="this.remove()" /></div>`;
         return `<div class="list-item ${isPlaying ? 'playing' : ''}" data-id="${it.id}">
+          ${rowThumb}
           <div class="left">
             <div class="title">${iconFor(it.type)} ${escapeHtml(it.title)}</div>
             <div class="meta">${escapeHtml(meta)}</div>
@@ -913,10 +1013,16 @@
 
     const thumb = $('detailThumb');
     const fallback = $('detailThumbFallback');
+    const backdrop = $('detailBackdrop');
     if (item.hasThumb && item.type !== 'track') {
-      thumb.src = '/api/media/' + item.id + '/thumb.jpg';
+      const url = '/api/media/' + item.id + '/thumb.jpg';
+      thumb.src = url;
       thumb.classList.remove('hidden');
       fallback.classList.add('hidden');
+      if (backdrop) {
+        backdrop.src = url;
+        backdrop.onerror = () => { backdrop.removeAttribute('src'); };
+      }
       thumb.onerror = () => {
         thumb.classList.add('hidden');
         fallback.classList.remove('hidden');
@@ -926,6 +1032,7 @@
       thumb.classList.add('hidden');
       fallback.classList.remove('hidden');
       fallback.textContent = iconFor(item.type);
+      if (backdrop) backdrop.removeAttribute('src');
     }
 
     const badges = [];
@@ -1661,8 +1768,25 @@
   }
 
   // Events
-  document.querySelectorAll('#nav button').forEach((b) => {
+  document.querySelectorAll('.sidebar .nav button[data-view]').forEach((b) => {
     b.addEventListener('click', () => setView(b.dataset.view));
+  });
+
+  // Sidebar: mobile drawer + brand home
+  $('btnMenu').addEventListener('click', () => document.body.classList.toggle('side-open'));
+  $('sideScrim').addEventListener('click', () => document.body.classList.remove('side-open'));
+  $('brandHome').addEventListener('click', () => setView('browse'));
+
+  // Escape: close player, then preplay, then any modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('playerPanel').classList.contains('hidden')) {
+      $('btnClosePlayer').click();
+    } else if (!$('detailModal').classList.contains('hidden')) {
+      $('detailModal').classList.add('hidden');
+    } else {
+      document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('hidden'));
+    }
   });
 
   let searchTimer;
@@ -1812,6 +1936,7 @@
 
   // Detail modal
   $('detailClose').addEventListener('click', () => $('detailModal').classList.add('hidden'));
+  $('detailCloseX').addEventListener('click', () => $('detailModal').classList.add('hidden'));
   $('detailModal').addEventListener('click', (e) => {
     if (e.target === $('detailModal')) $('detailModal').classList.add('hidden');
   });
@@ -2015,11 +2140,14 @@
       return;
     }
     state.user = me.user;
-    $('whoami').textContent = `${me.user.username} · ${me.user.role}`;
+    $('whoami').textContent = me.user.username;
+    $('sideRole').textContent = me.user.role === 'admin' ? 'Administrateur' : 'Utilisateur';
+    $('sideAvatar').textContent = (me.user.username || '?').slice(0, 1).toUpperCase();
     document.querySelectorAll('.admin-only').forEach((el) => {
       el.classList.toggle('hidden', me.user.role !== 'admin');
     });
     await refreshStats();
+    await loadLibraries().catch(() => {});
     render();
   })();
 })();

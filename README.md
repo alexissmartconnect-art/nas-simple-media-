@@ -31,8 +31,9 @@
 - **Remux direct** (type Plex) : vidéo **copiée sans ré-encodage** quand elle est compatible — quasi gratuit en CPU
 - **Mode Compatible** : ffmpeg → HLS, qualités **Original / 1080p / 720p / 480p**, audio **Stéréo ou Surround 5.1**, choix de la piste audio
 - **Sous-titres** intégrés extraits en WebVTT (SRT/ASS/MOV_TEXT), sélection dans le lecteur
-- Page **détail « preplay »** façon Plex : poster, badges de codecs, pistes audio/sous-titres, reprise
-- **Reprendre** (On Deck), **Récemment ajoutés**, **miniatures** vidéo, **dashboard** des transcodages (admin)
+- **Interface façon Plex** : sidebar (Accueil, Bibliothèques + compteurs, Partages, Admin), rails **Reprendre** / **Récemment ajoutés**, posters 2:3 + barre de progression, prévisualisation listes 16:9, **tri Films** (Titre A→Z / Z→A, Ajoutés récemment, Plus volumineux)
+- Page **détail « preplay »** façon Plex : **backdrop flouté**, poster, badges de codecs, pistes audio/sous-titres, reprise proposée
+- **Lecteur cinéma** plein écran : OSD haut/bas qui s’efface, navigation pistes audio / sous-titres / chapitres, **Reprendre** (On Deck), **Récemment ajoutés**, **miniatures** vidéo, **dashboard** des transcodages (admin)
 - **Télécharger** le fichier original + **Ouvrir dans VLC** (URL / `.m3u`)
 - Liens de partage `/s/<jeton>` (expiration, max uses, mot de passe) avec lecture / DL / VLC / Compatible Surround
 - Rescan + file watch optionnel

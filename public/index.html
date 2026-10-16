@@ -4,138 +4,166 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NAS Simple Media</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e5a00d'/%3E%3Cpath d='M26 20l18 12-18 12z' fill='%23161616'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
-  <div class="container">
-    <header class="topbar">
-      <div class="brand">
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand" id="brandHome" title="Accueil">
         <div class="brand-badge">▶</div>
-        <div>
-          <div>NAS Simple Media</div>
-          <div class="muted" style="font-size:0.75rem;font-weight:500" id="whoami"></div>
+        <span>NAS Simple Media</span>
+      </div>
+      <div class="sidebar-scroll">
+        <nav class="nav" id="nav">
+          <button type="button" data-view="browse" class="active"><span class="nicon">🏠</span>Accueil</button>
+        </nav>
+        <div class="sidebar-section">Bibliothèques</div>
+        <nav class="nav" id="libNav"></nav>
+        <div class="sidebar-section">Partages</div>
+        <nav class="nav" id="shareNav">
+          <button type="button" data-view="shares"><span class="nicon">🔗</span>Mes partages</button>
+        </nav>
+        <div class="sidebar-section admin-only hidden">Administration</div>
+        <nav class="nav admin-only hidden" id="adminNav">
+          <button type="button" data-view="admin-libs"><span class="nicon">📚</span>Bibliothèques</button>
+          <button type="button" data-view="admin-users"><span class="nicon">👥</span>Comptes</button>
+          <button type="button" data-view="admin-sessions"><span class="nicon">⚙️</span>Sessions</button>
+        </nav>
+      </div>
+      <div class="sidebar-foot">
+        <div class="user-avatar" id="sideAvatar">?</div>
+        <div class="uinfo">
+          <div class="un" id="whoami">…</div>
+          <div class="ur" id="sideRole"></div>
         </div>
       </div>
-      <nav class="nav" id="nav">
-        <button type="button" data-view="browse" class="active">Bibliothèques</button>
-        <button type="button" data-view="shares">Mes partages</button>
-        <button type="button" data-view="admin-libs" class="admin-only hidden">Admin · Bibliothèques</button>
-        <button type="button" data-view="admin-users" class="admin-only hidden">Admin · Comptes</button>
-        <button type="button" data-view="admin-sessions" class="admin-only hidden">Admin · Sessions</button>
-      </nav>
-      <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
-        <button class="btn admin-only hidden" id="btnRescan" type="button">Rescan</button>
-        <button class="btn btn-ghost" id="btnChangePwd" type="button">Mot de passe</button>
-        <button class="btn btn-ghost" id="btnLogout" type="button">Déconnexion</button>
+    </aside>
+    <div class="sidebar-scrim" id="sideScrim"></div>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn" id="btnMenu" type="button" title="Menu">☰</button>
+        <div class="search-row" id="searchRow">
+          <input id="search" type="search" placeholder="Rechercher films, séries, musique…" />
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-sm admin-only hidden" id="btnRescan" type="button" title="Rescanner les bibliothèques">⟳ <span class="btn-label">Rescan</span></button>
+          <button class="btn btn-sm btn-ghost" id="btnChangePwd" type="button" title="Changer mon mot de passe">🔑 <span class="btn-label">Mot de passe</span></button>
+          <button class="btn btn-sm btn-ghost" id="btnLogout" type="button" title="Déconnexion">⏻ <span class="btn-label">Quitter</span></button>
+        </div>
+      </header>
+      <div class="content-wrap">
+        <div class="stats" id="stats"></div>
+        <h2 class="section-title" id="sectionTitle">Accueil</h2>
+        <div id="content"></div>
       </div>
-    </header>
-
-    <div class="stats" id="stats"></div>
-    <div class="search-row" id="searchRow">
-      <input id="search" type="search" placeholder="Rechercher un titre, artiste, série…" />
     </div>
-
-    <h2 class="section-title" id="sectionTitle">Bibliothèques</h2>
-    <div id="content"></div>
   </div>
 
   <div class="player-panel hidden" id="playerPanel">
-    <div class="player-inner">
-      <div class="player-head">
-        <div>
-          <h3 id="nowPlaying">Lecture</h3>
-          <div class="muted" style="font-size:0.78rem" id="nowPlayingSub"></div>
-        </div>
-        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center">
-          <button class="btn btn-sm hidden" id="btnPrev" type="button" title="Précédent">⏮ Préc.</button>
-          <button class="btn btn-sm hidden" id="btnNext" type="button" title="Suivant">⏭ Suiv.</button>
-          <button class="btn" id="btnShareCurrent" type="button">Partager</button>
-          <button class="btn btn-ghost" id="btnClosePlayer" type="button">Fermer</button>
-        </div>
+    <div class="player-osd-top">
+      <button class="btn btn-sm" id="btnClosePlayer" type="button">← Retour</button>
+      <div style="min-width:0;flex:1">
+        <h3 id="nowPlaying">Lecture</h3>
+        <div class="muted" style="font-size:0.76rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="nowPlayingSub"></div>
       </div>
-      <div class="player-toolbar" id="playerToolbar">
-        <div class="player-controls-row">
-          <div class="mode-toggle" id="modeToggle">
-            <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
-            <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
-          </div>
-          <div class="player-actions">
-            <button class="btn" type="button" id="btnDownload">Télécharger</button>
-            <button class="btn" type="button" id="btnVlc">Ouvrir dans VLC</button>
-            <a class="btn" id="btnM3u" href="#" download>Playlist .m3u</a>
-          </div>
-        </div>
-        <div class="player-controls-row hidden" id="profileRow">
-          <label class="sel">Qualité
-            <select id="selQuality">
-              <option value="original">Original</option>
-              <option value="1080p">1080p</option>
-              <option value="720p">720p</option>
-              <option value="480p">480p</option>
-            </select>
-          </label>
-          <label class="sel">Audio
-            <select id="selAudio"></select>
-          </label>
-          <label class="sel">Sous-titres
-            <select id="selSubs"></select>
-          </label>
-          <span class="badge hidden" id="decisionBadge"></span>
-        </div>
-        <div class="resume-bar hidden" id="resumeBar">
-          <span id="resumeText"></span>
-          <button class="btn btn-sm btn-primary" type="button" id="btnResumeYes">Reprendre</button>
-          <button class="btn btn-sm btn-ghost" type="button" id="btnResumeNo">Depuis le début</button>
-        </div>
-        <p class="muted player-hint" id="playerHint"></p>
-      </div>
+      <button class="btn btn-sm hidden" id="btnPrev" type="button" title="Précédent">⏮</button>
+      <button class="btn btn-sm hidden" id="btnNext" type="button" title="Suivant">⏭</button>
+    </div>
+    <div class="player-stage">
       <video id="videoPlayer" controls playsinline class="hidden"></video>
       <audio id="audioPlayer" controls class="hidden"></audio>
+    </div>
+    <div class="player-osd-bottom">
+      <div class="player-inner-narrow">
+        <div class="player-toolbar" id="playerToolbar">
+          <div class="player-controls-row between">
+            <div class="mode-toggle" id="modeToggle">
+              <button type="button" class="btn mode-btn active" data-mode="direct" id="btnModeDirect">Direct</button>
+              <button type="button" class="btn mode-btn" data-mode="compatible" id="btnModeCompat">Compatible</button>
+            </div>
+            <div class="player-actions">
+              <button class="btn btn-sm" id="btnShareCurrent" type="button">🔗 Partager</button>
+              <button class="btn btn-sm" type="button" id="btnDownload">⬇ Télécharger</button>
+              <button class="btn btn-sm" type="button" id="btnVlc">Ouvrir dans VLC</button>
+              <a class="btn btn-sm" id="btnM3u" href="#" download>.m3u</a>
+            </div>
+          </div>
+          <div class="player-controls-row hidden" id="profileRow">
+            <label class="sel">Qualité
+              <select id="selQuality">
+                <option value="original">Original</option>
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+              </select>
+            </label>
+            <label class="sel">Audio
+              <select id="selAudio"></select>
+            </label>
+            <label class="sel">Sous-titres
+              <select id="selSubs"></select>
+            </label>
+            <span class="badge hidden" id="decisionBadge"></span>
+          </div>
+          <div class="resume-bar hidden" id="resumeBar">
+            <span id="resumeText"></span>
+            <button class="btn btn-sm btn-primary" type="button" id="btnResumeYes">Reprendre</button>
+            <button class="btn btn-sm btn-ghost" type="button" id="btnResumeNo">Depuis le début</button>
+          </div>
+          <p class="muted player-hint" id="playerHint"></p>
+        </div>
+      </div>
     </div>
   </div>
 
   <div class="modal-backdrop hidden" id="detailModal">
     <div class="modal detail-modal">
-      <div class="detail-hero">
-        <img id="detailThumb" class="detail-thumb hidden" alt="" />
-        <div class="detail-thumb-fallback" id="detailThumbFallback">🎬</div>
-        <div class="detail-head-text">
-          <h2 id="detailTitle">Titre</h2>
-          <p class="muted" id="detailSub"></p>
-          <div class="detail-badges" id="detailBadges"></div>
+      <div class="preplay-backdrop"><img id="detailBackdrop" alt="" /></div>
+      <button class="preplay-close" id="detailCloseX" type="button" title="Fermer">✕</button>
+      <div class="preplay-body">
+        <div class="detail-hero">
+          <img id="detailThumb" class="detail-poster hidden" alt="" />
+          <div class="detail-poster-fallback" id="detailThumbFallback">🎬</div>
+          <div class="detail-head-text">
+            <h2 id="detailTitle">Titre</h2>
+            <p class="muted" id="detailSub"></p>
+            <div class="detail-badges" id="detailBadges"></div>
+          </div>
         </div>
-      </div>
-      <p class="muted" id="detailHint" style="font-size:0.85rem"></p>
-      <div class="detail-streams hidden" id="detailStreams"></div>
-      <div class="detail-grid">
-        <div class="field">
-          <label for="detailQuality">Qualité</label>
-          <select id="detailQuality">
-            <option value="original">Original</option>
-            <option value="1080p">1080p</option>
-            <option value="720p">720p</option>
-            <option value="480p">480p</option>
-          </select>
+        <p class="muted" id="detailHint" style="font-size:0.85rem"></p>
+        <div class="detail-streams hidden" id="detailStreams"></div>
+        <div class="detail-grid">
+          <div class="field">
+            <label for="detailQuality">Qualité</label>
+            <select id="detailQuality">
+              <option value="original">Original</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="detailAudio">Audio</label>
+            <select id="detailAudio"></select>
+          </div>
+          <div class="field">
+            <label for="detailMode">Lecture</label>
+            <select id="detailMode">
+              <option value="auto">Auto (recommandé)</option>
+              <option value="direct">Direct — fichier original</option>
+              <option value="compatible">Compatible — HLS</option>
+            </select>
+          </div>
         </div>
-        <div class="field">
-          <label for="detailAudio">Audio</label>
-          <select id="detailAudio"></select>
+        <p class="ok hidden" id="detailResumeInfo"></p>
+        <div class="modal-actions detail-actions">
+          <button class="btn btn-ghost" id="detailClose" type="button">Fermer</button>
+          <button class="btn" id="detailVlc" type="button">VLC</button>
+          <button class="btn" id="detailDl" type="button">Télécharger</button>
+          <button class="btn btn-primary" id="detailPlay" type="button">▶ Lire</button>
         </div>
-        <div class="field">
-          <label for="detailMode">Lecture</label>
-          <select id="detailMode">
-            <option value="auto">Auto (recommandé)</option>
-            <option value="direct">Direct — fichier original</option>
-            <option value="compatible">Compatible — HLS</option>
-          </select>
-        </div>
-      </div>
-      <p class="ok hidden" id="detailResumeInfo"></p>
-      <div class="modal-actions detail-actions">
-        <button class="btn btn-ghost" id="detailClose" type="button">Fermer</button>
-        <button class="btn" id="detailVlc" type="button">VLC</button>
-        <button class="btn" id="detailDl" type="button">Télécharger</button>
-        <button class="btn btn-primary" id="detailPlay" type="button">▶ Lire</button>
       </div>
     </div>
   </div>
