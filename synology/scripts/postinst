@@ -13,10 +13,11 @@ ensure_dirs
 write_env_file
 
 # --- ownership ---------------------------------------------------------------
-# Files under target/ are chowned to the package user by the DSM privilege
-# framework; make sure the writable dirs match so the service can write its
-# database, cache and log.
-chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${APPDIR}" 2>/dev/null || true
+# Files under target/, var/, etc/, tmp/ are owned by the package user on DSM 7;
+# only run chown when invoked manually as root.
+if [ "$(id -u 2>/dev/null)" = "0" ]; then
+  chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${APPDIR}" 2>/dev/null || true
+fi
 chown_to_service
 
 # --- smoke test --------------------------------------------------------------
@@ -27,7 +28,8 @@ if [ -n "${NODE_BIN}" ]; then
     log "verifying SQLite engine with Node.js $(node_version "${NODE_BIN}")"
     _smoke="${TMP_DIR}/sqlite-smoke.js"
     cat > "${_smoke}" <<'EOF'
-const { openDatabase, activeBackend } = require('./dist/db/sqlite');
+const path = require('path');
+const { openDatabase, activeBackend } = require(path.join(process.cwd(), 'dist/db/sqlite'));
 const db = openDatabase(':memory:');
 db.exec('CREATE TABLE t(a INTEGER)');
 db.prepare('INSERT INTO t VALUES (?)').run(1);
@@ -36,7 +38,14 @@ db.close();
 if (!row || row.a !== 1) { throw new Error('sqlite round-trip failed'); }
 process.stdout.write(activeBackend() + '\n');
 EOF
-    if _out="$(su -s /bin/sh "${SERVICE_USER}" -c "cd ${APPDIR} && ${NODE_BIN} ${_smoke}" 2>&1)"; then
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then
+      _out="$(su -s /bin/sh "${SERVICE_USER}" -c "cd ${APPDIR} && ${NODE_BIN} ${_smoke}" 2>&1)"
+      _rc=$?
+    else
+      _out="$(cd "${APPDIR}" && "${NODE_BIN}" "${_smoke}" 2>&1)"
+      _rc=$?
+    fi
+    if [ "${_rc}" -eq 0 ]; then
       log "SQLite engine OK (backend: ${_out})"
     else
       warn "SQLite smoke test failed: ${_out}"

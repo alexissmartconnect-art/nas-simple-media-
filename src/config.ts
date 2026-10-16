@@ -62,7 +62,12 @@ const STREAM_TOKEN_TTL_MS = Math.max(
 );
 
 fs.mkdirSync(DATA_PATH, { recursive: true });
-fs.mkdirSync(MEDIA_PATH, { recursive: true });
+try {
+  fs.mkdirSync(MEDIA_PATH, { recursive: true });
+} catch {
+  // On Synology DSM, the service user (sc-nas-simple-media) only has read access
+  // to shared folders and cannot create directories under /volume1.
+}
 fs.mkdirSync(path.join(DATA_PATH, 'cache', 'transcode'), { recursive: true });
 fs.mkdirSync(path.join(DATA_PATH, 'cache', 'thumbs'), { recursive: true });
 fs.mkdirSync(path.join(DATA_PATH, 'cache', 'subs'), { recursive: true });
