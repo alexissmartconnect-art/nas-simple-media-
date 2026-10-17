@@ -13,7 +13,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const SYNO_DIR = path.join(REPO_ROOT, 'synology');
 
 const PACKAGE_NAME = 'nas-simple-media';
-const TARGET_VERSION = '1.6.0';
+const TARGET_VERSION = '1.6.1';
 const TARGET_ARCH = 'geminilake';
 const TARGET_PORT = '8096';
 
@@ -38,7 +38,7 @@ describe('DSM 7 SPK metadata', () => {
     }
   });
 
-  it('targets Synology DS220+ (geminilake) at version 1.6.0', () => {
+  it('targets Synology DS220+ (geminilake) at version 1.6.1', () => {
     const info = readInfo();
     assert.equal(info.get('package'), PACKAGE_NAME);
     assert.equal(info.get('version'), TARGET_VERSION);
@@ -207,7 +207,7 @@ describe('package.json wiring', () => {
     assert.ok(pkg.scripts.test.includes('tests/ui.test.ts'), 'UI smoke tests must run');
   });
 
-  it('keeps the 1.6.0 version in sync across the package files', () => {
+  it('keeps the 1.6.1 version in sync across the package files', () => {
     assert.equal(readInfo().get('version'), TARGET_VERSION);
     assert.ok(
       readScript('preinst').includes(`VERSION:-${TARGET_VERSION}`),
@@ -245,7 +245,7 @@ describe('release artefacts stay out of git', () => {
       }
     };
     for (const artefact of [
-      'dist-spk/nas-simple-media-1.6.0-geminilake.spk',
+      'dist-spk/nas-simple-media-1.6.1-geminilake.spk',
       'synology/package/app/dist/index.js',
       'node_modules/express/package.json',
       'dist/index.js',

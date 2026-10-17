@@ -3,7 +3,7 @@
 
 . "$(dirname "$0")/common.sh"
 
-log "pre-install checks for ${PKGNAME} ${VERSION:-1.6.0}"
+log "pre-install checks for ${PKGNAME} ${VERSION:-1.6.1}"
 
 # --- DSM version -------------------------------------------------------------
 _dsm_major="${SYNOPKG_DSM_VERSION_MAJOR:-7}"

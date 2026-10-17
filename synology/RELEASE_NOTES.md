@@ -1,3 +1,15 @@
+## NAS Simple Media 1.6.1 — Cohérence de la documentation et de la publication
+
+- **Configuration documentée** : `.env.example` rassemble les variables de configuration
+  et de sécurité utiles au déploiement.
+- **README corrigé** : version courante et nom du paquet SPK alignés sur `1.6.1` ;
+  les indications sur le mot de passe d’usine sont explicites.
+- **`changeme`** : le rappel concerne uniquement le mot de passe d’usine du compte `admin`
+  lorsqu’il est encore utilisé, pas les autres mots de passe.
+- **Android** : le code source envoie l’User-Agent `NASMedia-Android/0.2.0`. L’APK 0.2.0
+  déjà publié n’a pas été recompilé et conserve l’User-Agent `0.1` ; cette release ne
+  republie pas l’application Android.
+
 ## NAS Simple Media 1.6.0 — Sécurité (phase 0)
 
 - **Mot de passe par défaut** : un compte qui utilise encore `changeme` doit le changer
