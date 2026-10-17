@@ -63,6 +63,15 @@ const STREAM_TOKEN_TTL_MS = Math.max(
 
 fs.mkdirSync(DATA_PATH, { recursive: true });
 try {
+  fs.accessSync(DATA_PATH, fs.constants.W_OK);
+} catch {
+  throw new Error(
+    `DATA_PATH ${DATA_PATH} n'est pas accessible en écriture pour l'utilisateur ${
+      typeof process.getuid === 'function' ? process.getuid() : '?'
+    }. Docker (image non-root, uid 1000) : sudo chown -R 1000:1000 <dossier data de l'hôte>.`
+  );
+}
+try {
   fs.mkdirSync(MEDIA_PATH, { recursive: true });
 } catch {
   // On Synology DSM, the service user (sc-nas-simple-media) only has read access

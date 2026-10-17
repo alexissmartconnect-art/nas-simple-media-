@@ -1,16 +1,31 @@
 services:
   nas-simple-media:
     build: .
-    image: nas-simple-media:1.1.0
+    image: nas-simple-media:1.6.0
     container_name: nas-simple-media
     restart: unless-stopped
+    # The image runs as the unprivileged user "node" (uid/gid 1000).
+    # The host data folder must be writable by it (once):
+    #   sudo chown -R 1000:1000 /volume1/docker/nas-simple-media/data
+    # Or run with your own DSM uid/gid instead (folder owned by that user):
+    # user: "1026:100"
     ports:
+      # Default: reachable on the LAN at http://<NAS>:8096
       - "8096:8096"
+      # Reverse-proxy mode (DSM Reverse Proxy / Tailscale serve on the NAS only):
+      # replace the line above by the next one so 8096 is not reachable from the
+      # network at all; only the local HTTPS proxy talks to the app.
+      # - "127.0.0.1:8096:8096"
     environment:
       MEDIA_PATH: /media
       DATA_PATH: /data
       PORT: "8096"
+      # Initial admin password. "changeme" must be changed at the first login.
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-changeme}"
+      # Only these proxies may set X-Forwarded-For/-Proto (default below covers the
+      # DSM reverse proxy through the Docker bridge). 0 = trust nobody.
+      TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-loopback, linklocal, uniquelocal}"
+      # SESSION_SECRET is generated in /data/session.secret when not set.
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8096}"
       ENABLE_WATCH: "${ENABLE_WATCH:-1}"
       TRANSCODE_ENABLED: "${TRANSCODE_ENABLED:-true}"
@@ -26,6 +41,8 @@ services:
       # TRANSCODE_HWACCEL: "${TRANSCODE_HWACCEL:-none}"
     # devices:
     #   - /dev/dri:/dev/dri  # required for VAAPI/QSV hardware transcoding
+    # group_add:
+    #   - "937"  # gid of /dev/dri/renderD128 on the NAS (ls -n /dev/dri), needed as non-root
     volumes:
       # Synology: replace host paths with your shared folders
       - /volume1/media:/media:ro

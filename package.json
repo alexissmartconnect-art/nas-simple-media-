@@ -1,6 +1,6 @@
 {
   "name": "nas-simple-media",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Simple free Plex-like media server for Synology NAS — movies, music, TV series, ffmpeg Compatible playback, VLC/download",
   "main": "dist/index.js",
   "scripts": {

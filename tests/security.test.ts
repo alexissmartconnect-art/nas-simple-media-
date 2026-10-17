@@ -359,4 +359,16 @@ describe('security hardening (phase 0)', () => {
     assert.notEqual(other.status, 429);
     _clearRateLimitsForTests();
   });
+
+  it('ships a non-root Docker image whose tag follows package.json', () => {
+    const root = path.join(__dirname, '..');
+    const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+    assert.match(dockerfile, /^USER node$/m);
+    assert.match(dockerfile, /chown -R node:node \/data/);
+    const compose = fs.readFileSync(path.join(root, 'docker-compose.yml'), 'utf8');
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string };
+    assert.ok(compose.includes(`image: nas-simple-media:${pkg.version}`), 'compose image tag = package version');
+    assert.ok(compose.includes('127.0.0.1:8096:8096'), 'loopback-only proxy mode documented');
+    assert.match(compose, /^\s+- "8096:8096"$/m, 'default stays reachable on the LAN');
+  });
 });

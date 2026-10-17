@@ -1,3 +1,23 @@
+## NAS Simple Media 1.6.0 — Sécurité (phase 0)
+
+- **Mot de passe par défaut** : un compte qui utilise encore `changeme` doit le changer
+  à la première connexion (imposé par le serveur ; l’appli Android renvoie vers le web).
+- **Mots de passe** : 10 caractères minimum pour tout nouveau mot de passe (les anciens
+  continuent de fonctionner).
+- **Sessions** conservées dans SQLite : un redémarrage du NAS ne déconnecte plus personne ;
+  déconnexion et changement de mot de passe invalident réellement les sessions.
+- **Secret** aléatoire généré dans le dossier de données (`session.secret`), plus dérivé
+  du mot de passe admin.
+- **Cookie** `HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS. **HSTS** uniquement en HTTPS.
+  **CSP** stricte (aucun script inline) et anti-iframe.
+- **Proxy** : seuls les proxys locaux sont crus (`TRUST_PROXY_HOPS`), l’IP cliente ne
+  peut plus être falsifiée depuis Internet. Limites de débit par IP sur la connexion et
+  les liens publics, verrouillage temporaire d’un compte après 10 échecs (hors réseau local).
+- **Partages** : le mot de passe n’apparaît plus jamais dans les URL (jeton signé de courte
+  durée, cookie dédié) ; les anciens liens `?password=` restent acceptés pendant la transition.
+  Les réponses publiques ne contiennent plus les chemins du NAS.
+- `/api/setup/status` ne révèle l’état du mot de passe par défaut qu’au réseau local.
+
 ## NAS Simple Media 1.5.1 — Diagnostic Tailscale sécurisé
 
 - Bouton **Vérifier Tailscale** dans Administration → Accès externe.
