@@ -62,9 +62,6 @@ jobs:
           java-version: '17'
 
       - name: Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Installer les composants SDK
         run: bash android/ci/install-sdk.sh
 
       - name: Cache Gradle
