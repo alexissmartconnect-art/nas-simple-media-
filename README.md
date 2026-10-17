@@ -15,9 +15,10 @@
 7. [Installation Synology (Container Manager)](#installation-synology-container-manager)
 8. [Installation native Synology (paquet SPK, DSM 7)](#installation-native-synology-paquet-spk-dsm-7)
 9. [Accès distant (Bouygues / CGNAT)](#accès-distant-bouygues--cgnat)
-10. [Variables d'environnement](#variables-denvironnement)
-11. [Développement local](#développement-local)
-12. [Parité Plex & limites](#parité-plex--limites)
+10. [Appli mobile (PWA)](#appli-mobile-pwa)
+11. [Variables d'environnement](#variables-denvironnement)
+12. [Développement local](#développement-local)
+13. [Parité Plex & limites](#parité-plex--limites)
 
 ---
 
@@ -325,6 +326,31 @@ Si l’accès est refusé, aucune élévation automatique n’est tentée ; ne p
 
 Les liens générés alors utilisent automatiquement l'adresse externe ; s'ils restent en adresse
 privée, la modale de partage affiche un avertissement avec un bouton **Configurer l'adresse externe**.
+
+---
+
+## Appli mobile (PWA)
+
+L’interface est installable comme une appli (icône sur l’écran d’accueil, plein écran, sans barre
+d’adresse) sur Android, iPhone/iPad et ordinateur.
+
+- **Android (Chrome / Edge / Samsung Internet)** : ouvrez l’adresse du NAS, puis le bouton
+  **📲 Installer l’appli** dans la barre du haut, ou menu ⋮ → *Installer l’application* /
+  *Ajouter à l’écran d’accueil*.
+- **iPhone / iPad (Safari)** : bouton Partager → *Sur l’écran d’accueil*.
+- **Ordinateur (Chrome / Edge)** : icône d’installation dans la barre d’adresse.
+
+> ⚠️ L’installation et le service worker exigent **HTTPS** (sauf sur `localhost`). Depuis
+> l’extérieur, passez par le proxy inversé DSM + Let’s Encrypt, Tailscale (`tailscale serve` /
+> Funnel en `https://….ts.net`) ou Cloudflare Tunnel. Sur `http://192.168.x.x:8096`, le site reste
+> utilisable mais ne s’installe pas comme une appli.
+
+**Règles de cache** : seule la coquille statique (CSS, JS, icônes, `hls.js`, manifeste) est mise
+en cache, versionnée avec la version de l’appli et nettoyée à chaque mise à jour. Les pages HTML,
+`/api/*`, les flux, playlists et segments HLS, les téléchargements et les liens `/s/…` passent
+toujours par le réseau et ne sont **jamais** mis en cache. Hors connexion, une page « Serveur
+injoignable » s’affiche. `hls.js` est désormais servi localement (`public/vendor/hls.js`, v1.5.17)
+au lieu du CDN jsDelivr.
 
 ---
 
