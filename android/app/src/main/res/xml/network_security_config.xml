@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HTTPS partout par défaut (Tailscale *.ts.net, proxy DSM, domaine public).
+  Le HTTP en clair reste autorisé pour joindre le NAS sur le réseau local
+  (http://192.168.x.x:8096, http://nas.local:8096) : Android ne sait pas
+  restreindre le clair à des plages d'IP, donc on l'autorise au niveau de
+  l'appli — l'écran d'ajout de serveur avertit quand une adresse publique
+  est saisie en http://.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
