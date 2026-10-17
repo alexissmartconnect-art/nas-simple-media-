@@ -20,6 +20,8 @@
 12. [Parité Plex & limites](#parité-plex--limites)
 13. [Appli Android (téléphone & Android TV)](#appli-android-téléphone--android-tv)
 
+📘 **Mode opératoire pas-à-pas (admin & invités) : [docs/DOP.md](docs/DOP.md)**
+
 ---
 
 ## Nouveautés 1.5.1 — Diagnostic Tailscale en lecture seule
