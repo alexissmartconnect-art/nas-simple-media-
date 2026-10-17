@@ -595,4 +595,51 @@ describe('security, scanner, shares, HLS helpers & HTTP API', () => {
       changeOwnPassword(admin.id, 'brand-new-password', 'admin-secret-password');
     }
   });
+
+  it('serves what the native Android/TV client needs (cookie session, show posters, resume)', async () => {
+    const cookie = await adminCookie();
+    assert.ok(cookie.startsWith('nas_sm_session='), 'native client reads the session from Set-Cookie');
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+
+    const libs = (await (await fetch(`${baseUrl}/api/libraries`, { headers })).json()) as {
+      libraries: Array<{ id: number; type: string }>;
+    };
+    const seriesLib = libs.libraries.find((l) => l.type === 'series');
+    assert.ok(seriesLib);
+
+    const showsRes = await fetch(`${baseUrl}/api/series?library_id=${seriesLib!.id}`, { headers });
+    assert.equal(showsRes.status, 200);
+    const shows = (await showsRes.json()) as {
+      shows: Array<{ name: string; episodes: number; poster_media_id: number | null }>;
+    };
+    const dark = shows.shows.find((s) => s.name === 'Dark');
+    assert.ok(dark, 'Dark is listed');
+    const eps = (await (
+      await fetch(`${baseUrl}/api/media?library_id=${seriesLib!.id}&show=Dark`, { headers })
+    ).json()) as { items: Array<{ id: number; season: number; episode: number }> };
+    const first = [...eps.items].sort((a, b) => a.season - b.season || a.episode - b.episode)[0];
+    assert.equal(dark!.poster_media_id, first.id, 'poster = first episode (S01E01)');
+
+    // Resume point round-trip used by the player (positionMs / durationMs).
+    const save = await fetch(`${baseUrl}/api/media/${first.id}/progress`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ positionMs: 120_000, durationMs: 3_000_000 }),
+    });
+    assert.equal(save.status, 200);
+    const detail = (await (await fetch(`${baseUrl}/api/media/${first.id}`, { headers })).json()) as {
+      progress: { position_ms: number; watched: boolean } | null;
+    };
+    assert.equal(detail.progress?.position_ms, 120_000);
+    assert.equal(detail.progress?.watched, false);
+    const cont = (await (await fetch(`${baseUrl}/api/continue-watching`, { headers })).json()) as {
+      items: Array<{ id: number; progress_ratio: number }>;
+    };
+    assert.ok(cont.items.some((i) => i.id === first.id));
+    await fetch(`${baseUrl}/api/media/${first.id}/progress`, { method: 'DELETE', headers });
+
+    // Without the cookie the API answers 401 JSON (the app then re-logs in).
+    const anon = await fetch(`${baseUrl}/api/series`);
+    assert.equal(anon.status, 401);
+  });
 });
