@@ -8,8 +8,8 @@
 | Repère | Signification |
 |---|---|
 | 🟢 | Disponible aujourd’hui sur `main` |
-| 🟠 **PR #9** | Dépend de la PR [#9 « appli Android »](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/9), **pas encore fusionnée** |
-| 🟠 **PR #8** | Dépend de la PR [#8 « PWA »](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/8), **pas encore fusionnée** |
+| 🟢 *(PR #9)* | Appli Android — PR [#9](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/9) **fusionnée**, disponible |
+| 🟢 *(PR #8)* | Appli web installable (PWA) — PR [#8](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/8) **fusionnée**, disponible |
 | ⚠️ | Point de sécurité à lire avant d’agir |
 
 Les intitulés des menus **Synology DSM**, **Freebox OS**, **Tailscale** et **Android** peuvent légèrement varier selon la version ou le fabricant.
@@ -153,7 +153,7 @@ Rien n’est ouvert sur la Freebox. Seuls les appareils invités dans votre rés
 
    La commande `status` affiche l’adresse, de la forme `https://<nom-du-nas>.<votre-tailnet>.ts.net`.
 3. Dans NAS Simple Media : **Administration → 🌐 Accès externe** → collez cette adresse → **Enregistrer**. Les liens de partage et QR codes l’utiliseront.
-4. Avec cette adresse HTTPS, l’appli web s’installe sur téléphone (🟠 **PR #8**).
+4. Avec cette adresse HTTPS, l’appli web s’installe sur téléphone (PWA 🟢).
 
 > `tailscale serve` reste **privé** : seuls les appareils de votre tailnet y accèdent. `tailscale funnel` rendrait le serveur **public** ; ne l’utilisez pas avant la phase sécurité (voir l’avertissement plus haut).
 
@@ -236,13 +236,13 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
 5. **Révoquer** : menu **🔗 Mes partages** → **Révoquer** sur la ligne concernée, puis confirmez.
 
 > Avec la voie A, un lien `/s/` ne fonctionne que pour les personnes connectées à votre tailnet.
-> Un lien `/s/` s’ouvre dans le navigateur 🟢, ou directement dans l’appli Android en mode invité 🟠 **PR #9**.
+> Un lien `/s/` s’ouvre dans le navigateur, ou directement dans l’appli Android en mode invité 🟢.
 
 ---
 
 ## 5. Invité — téléphone Android
 
-> 🟠 **PR #9** : l’appli native n’est disponible qu’une fois la PR #9 fusionnée, ou si l’administrateur vous transmet l’APK de test (`nas-media-debug.apk`). En attendant, le navigateur fonctionne toujours : `https://<adresse>` → page de connexion.
+> 🟢 L’appli native **NAS Media** est disponible : l’administrateur transmet l’APK (`nas-media-debug.apk`, produit par `cd android && ./gradlew assembleDebug`). Le navigateur fonctionne aussi : `https://<adresse>` → page de connexion.
 
 **5.1 (Voie A seulement) Installer Tailscale**
 
@@ -285,7 +285,7 @@ Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aus
 
 ## 6. Invité — Android TV / Google TV
 
-> 🟠 **PR #9** : même appli que sur téléphone.
+> 🟢 Même appli que sur téléphone.
 
 **6.1 (Voie A seulement) Tailscale sur la télé**
 
@@ -326,7 +326,7 @@ L’appli **NAS Media** apparaît dans le lanceur TV avec sa bannière orange.
 
 ## 7. Invité — iPhone / iPad
 
-> 🟠 **PR #8** : l’installation sur l’écran d’accueil (PWA) n’est possible qu’une fois la PR #8 fusionnée, **et** avec une adresse **HTTPS** (voie A `…ts.net` ou voie B `…synology.me`). Avec `http://192.168.x.x:8096`, cela ne fonctionne pas. Il n’y a pas d’appli native iOS.
+> 🟢 L’installation sur l’écran d’accueil (PWA) est disponible, **à condition** d’utiliser une adresse **HTTPS** (voie A `…ts.net` ou voie B `…synology.me`). Avec `http://192.168.x.x:8096`, cela ne fonctionne pas. Il n’y a pas d’appli native iOS.
 
 1. (Voie A) App Store → **Tailscale** → connectez-vous avec le compte invité.
 2. Ouvrez **Safari**. L’installation sur l’écran d’accueil ne se fait que depuis Safari.
