@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NAS Simple Media</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e5a00d'/%3E%3Cpath d='M26 20l18 12-18 12z' fill='%23161616'/%3E%3C/svg%3E" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#191919" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="apple-mobile-web-app-title" content="NAS Media" />
+  <meta name="application-name" content="NAS Media" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
@@ -50,6 +59,7 @@
         </div>
         <div class="topbar-actions">
           <button class="btn btn-sm admin-only hidden" id="btnRescan" type="button" title="Rescanner les bibliothèques">⟳ <span class="btn-label">Rescan</span></button>
+          <button class="btn btn-sm btn-ghost hidden" id="btnInstall" type="button" title="Installer l’appli sur cet appareil">📲 <span class="btn-label">Installer l’appli</span></button>
           <button class="btn btn-sm btn-ghost" id="btnChangePwd" type="button" title="Changer mon mot de passe">🔑 <span class="btn-label">Mot de passe</span></button>
           <button class="btn btn-sm btn-ghost" id="btnLogout" type="button" title="Déconnexion">⏻ <span class="btn-label">Quitter</span></button>
         </div>
@@ -363,7 +373,8 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+  <script src="/vendor/hls.js/hls.min.js"></script>
   <script src="/js/app.js"></script>
+  <script src="/js/pwa.js" defer></script>
 </body>
 </html>

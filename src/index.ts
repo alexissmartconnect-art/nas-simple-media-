@@ -1,5 +1,6 @@
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
+import fs from 'fs';
 import path from 'path';
 import { config } from './config';
 import { getDb, closeDb } from './db/schema';
@@ -16,6 +17,16 @@ import { startCacheCleaner, stopAllTranscodeJobs } from './transcode/hls';
  * Set TRUST_PROXY=0 if port 8096 is exposed directly to the Internet.
  */
 export const TRUST_PROXY = process.env.TRUST_PROXY !== '0' && process.env.TRUST_PROXY !== 'false';
+
+/** App version (package.json), used to version the PWA service-worker cache. */
+export const APP_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    return String(pkg.version || 'dev');
+  } catch {
+    return 'dev';
+  }
+})();
 
 export function createApp(): Express {
   const app = express();
@@ -51,7 +62,34 @@ export function createApp(): Express {
     res.sendFile(path.join(publicDir, 'index.html'));
   });
 
-  app.use(express.static(publicDir, { index: false }));
+  // --- PWA -------------------------------------------------------------------
+  // The service worker is served at the root so it controls the whole origin.
+  // Its cache name embeds the app version, so each release refreshes the shell.
+  app.get('/sw.js', (_req, res) => {
+    let source: string;
+    try {
+      source = fs.readFileSync(path.join(publicDir, 'sw.js'), 'utf8');
+    } catch {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.send(source.replace(/__APP_VERSION__/g, APP_VERSION));
+  });
+
+  app.use(
+    express.static(publicDir, {
+      index: false,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    })
+  );
 
   return app;
 }
