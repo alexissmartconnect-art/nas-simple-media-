@@ -40,6 +40,16 @@
   const content = $('content');
   const sectionTitle = $('sectionTitle');
 
+  // Broken posters disappear (delegated: inline onerror= is blocked by the CSP).
+  document.addEventListener(
+    'error',
+    (e) => {
+      const el = e.target;
+      if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) el.remove();
+    },
+    true
+  );
+
   async function api(path, opts = {}) {
     const res = await fetch(path, {
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
@@ -50,6 +60,11 @@
       throw new Error('Unauthorized');
     }
     const data = await res.json().catch(() => ({}));
+    if (res.status === 403 && data && data.code === 'PASSWORD_CHANGE_REQUIRED') {
+      // Factory password still in use: the server only allows the change form.
+      location.href = '/login.html?change=1';
+      throw new Error(data.error || 'Changement de mot de passe obligatoire');
+    }
     if (!res.ok) {
       const err = new Error(data.error || res.statusText);
       err.payload = data;
@@ -838,7 +853,7 @@
     if (it.type === 'track') return `<span class="thumb-icon">${icon}</span>`;
     return (
       `<span class="thumb-icon">${icon}</span>` +
-      `<img class="poster-img" loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" onerror="this.remove()" />`
+      `<img class="poster-img" loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" data-hide-on-error />`
     );
   }
 
@@ -1031,7 +1046,7 @@
           it.type === 'track'
             ? `<div class="row-thumb-fallback">🎵</div>`
             : `<div class="row-thumb-wrap"><div class="row-thumb-fallback">${iconFor(it.type)}</div>` +
-              `<img class="row-thumb" loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" onerror="this.remove()" /></div>`;
+              `<img class="row-thumb" loading="lazy" src="/api/media/${it.id}/thumb.jpg" alt="" data-hide-on-error /></div>`;
         return `<div class="list-item ${isPlaying ? 'playing' : ''}" data-id="${it.id}">
           ${rowThumb}
           <div class="left">
@@ -1598,7 +1613,7 @@
           <div class="left">
             <div class="title">${escapeHtml(s.title)}</div>
             <div class="meta">par ${escapeHtml(s.created_by_name || '?')} · exp: ${escapeHtml(exp)} · uses: ${uses}${
-              s.password_hash ? ' · 🔒' : ''
+              s.has_password || s.password_hash ? ' · 🔒' : ''
             }${kind}</div>
           </div>
           <div class="actions">
@@ -2586,6 +2601,10 @@
     const me = await fetch('/api/me').then((r) => r.json());
     if (!me.authenticated) {
       location.href = '/login.html';
+      return;
+    }
+    if (me.mustChangePassword) {
+      location.href = '/login.html?change=1';
       return;
     }
     state.user = me.user;

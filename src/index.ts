@@ -1,5 +1,6 @@
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import fs from 'fs';
 import path from 'path';
 import { config } from './config';
@@ -11,12 +12,36 @@ import { startCacheCleaner, stopAllTranscodeJobs } from './transcode/hls';
 
 /**
  * Reverse proxy support: DSM Reverse Proxy, Cloudflare Tunnel, Tailscale and
- * nginx all forward `X-Forwarded-Proto` / `X-Forwarded-Host`. Trusting them lets
- * Express expose the real protocol + host, so share links, `.m3u` streams and QR
- * codes automatically use the external address (https://mon-nas.synology.me).
- * Set TRUST_PROXY=0 if port 8096 is exposed directly to the Internet.
+ * nginx forward `X-Forwarded-For/Proto/Host`. Only proxies matching
+ * TRUST_PROXY_HOPS are trusted (default: loopback, link-local and private
+ * addresses — never "everyone"), so req.ip / req.secure / req.hostname are the
+ * real values and an Internet client cannot spoof them. See config.ts.
  */
-export const TRUST_PROXY = process.env.TRUST_PROXY !== '0' && process.env.TRUST_PROXY !== 'false';
+export const TRUST_PROXY = config.TRUST_PROXY;
+
+/**
+ * Content-Security-Policy compatible with the app: every script is a local
+ * file (no inline script; hls.js is vendored), hls.js may use blob: workers
+ * and MediaSource blob: URLs, posters/QR come from the same origin. Inline
+ * `style="…"` attributes are still used by the UI, hence 'unsafe-inline' for
+ * styles only. The app must never be framed (clickjacking).
+ */
+export const CSP_DIRECTIVES: Record<string, string[]> = {
+  'default-src': ["'self'"],
+  'script-src': ["'self'"],
+  'script-src-attr': ["'none'"],
+  'style-src': ["'self'", "'unsafe-inline'"],
+  'img-src': ["'self'", 'data:', 'blob:'],
+  'media-src': ["'self'", 'blob:', 'data:'],
+  'font-src': ["'self'", 'data:'],
+  'connect-src': ["'self'"],
+  'worker-src': ["'self'", 'blob:'],
+  'manifest-src': ["'self'"],
+  'object-src': ["'none'"],
+  'base-uri': ["'self'"],
+  'form-action': ["'self'"],
+  'frame-ancestors': ["'none'"],
+};
 
 /** App version (package.json), used to version the PWA service-worker cache. */
 export const APP_VERSION: string = (() => {
@@ -33,9 +58,26 @@ export function createApp(): Express {
 
   app.set('trust proxy', TRUST_PROXY);
   app.disable('x-powered-by');
-  app.use((_req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: false,
+        // No upgrade-insecure-requests: the app is legitimately used over plain HTTP on the LAN.
+        directives: CSP_DIRECTIVES,
+      },
+      // HSTS is only sent on HTTPS requests (below); never on the LAN http:// URL.
+      strictTransportSecurity: false,
+      // Media / posters may be loaded by VLC, Chromecast-like clients and the Android app.
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      crossOriginEmbedderPolicy: false,
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      xFrameOptions: { action: 'deny' },
+    })
+  );
+  app.use((req, res, next) => {
+    if (req.secure) {
+      res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+    }
     next();
   });
 

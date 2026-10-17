@@ -82,4 +82,47 @@ class ApiClientTest {
         assertEquals("v", ApiClient.parseCookie("a=1; nas_sm_session=v; Path=/", "nas_sm_session"))
         assertEquals(null, ApiClient.parseCookie("nas_sm_session=; Path=/", "nas_sm_session"))
     }
+
+    @Test fun loginWithFactoryPasswordAsksForWebChange() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"mustChangePassword":true,"code":"PASSWORD_CHANGE_REQUIRED",""" +
+                    """"user":{"id":1,"username":"admin","role":"admin","can_share":true,"must_change_password":true}}"""
+            ).addHeader("Set-Cookie", "nas_sm_session=tmp; Path=/; HttpOnly; SameSite=Lax"),
+        )
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+        val e = runCatching { ApiClient(client).login(base, "admin", "changeme") }.exceptionOrNull()
+        assertTrue(e is PasswordChangeRequiredException)
+        assertTrue(e!!.message!!.contains("/login.html"))
+        server.takeRequest()
+        val logout = server.takeRequest()
+        assertEquals("/api/logout", logout.path)
+        assertEquals("nas_sm_session=tmp", logout.getHeader("Cookie"))
+    }
+
+    @Test fun passwordChangeRequired403IsReported() = runTest {
+        Session.token = "tok"
+        server.enqueue(
+            MockResponse().setResponseCode(403)
+                .setBody("""{"error":"Changement obligatoire","code":"PASSWORD_CHANGE_REQUIRED"}"""),
+        )
+        val e = runCatching { ApiClient(client).libraries() }.exceptionOrNull()
+        assertTrue(e is PasswordChangeRequiredException)
+    }
+
+    @Test fun shareUnlockPostsPasswordOnceThenUsesToken() = runTest {
+        server.enqueue(MockResponse().setBody("""{"ok":true,"accessToken":"v1.abc.sig","expiresInMs":1000}"""))
+        server.enqueue(MockResponse().setBody("""{"needsPassword":false,"items":[]}"""))
+        val api = ApiClient(client)
+        val access = api.unlockShare(base, "shr", "s3cret pw")
+        assertEquals("v1.abc.sig", access)
+        val unlock = server.takeRequest()
+        assertEquals("POST", unlock.method)
+        assertEquals("/api/public/share/shr/unlock", unlock.path)
+        assertTrue(unlock.body.readUtf8().contains("s3cret pw"))
+        api.share(base, "shr", access)
+        val info = server.takeRequest()
+        assertEquals("/api/public/share/shr?access=v1.abc.sig", info.path)
+        assertTrue(!info.path!!.contains("password"))
+    }
 }

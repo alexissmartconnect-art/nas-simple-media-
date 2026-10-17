@@ -6,8 +6,15 @@ import {
   isRateLimited,
   recordFailedAttempt,
   clearFailedAttempts,
+  hitRateLimit,
 } from '../auth/rateLimit';
-import { requireAuth, requireAdmin, type AuthedRequest } from '../middleware/auth';
+import {
+  requireAuth,
+  requireAdmin,
+  rejectIfPasswordChangeRequired,
+  PASSWORD_CHANGE_REQUIRED,
+  type AuthedRequest,
+} from '../middleware/auth';
 import { scanLibrary, startFileWatch } from '../scanner/scan';
 import {
   createShare,
@@ -29,6 +36,11 @@ import {
   isPrivateHost,
 } from '../shares/qr';
 import { streamFile, isPathAllowed } from './stream';
+import {
+  createShareAccessToken,
+  verifyShareAccessToken,
+  shareAccessCookieName,
+} from '../shares/shareAccess';
 import {
   authenticate,
   listUsers,
@@ -113,20 +125,34 @@ function okUser(req: AuthedRequest) {
 }
 
 /**
- * Client IP used for rate limiting. `trust proxy` is enabled so reverse-proxy
- * setups (DSM, Cloudflare Tunnel, Docker) see the real remote address — but a
- * forwarded address is only honored when the direct peer is a local/private
- * proxy, so a client hitting port 8096 straight from the Internet cannot forge
- * `X-Forwarded-For` to bypass the login rate limiter.
+ * Client IP used for rate limiting and lockouts. Express resolves req.ip from
+ * X-Forwarded-For only through proxies matching TRUST_PROXY_HOPS (default:
+ * loopback / link-local / private), so a client reaching port 8096 from the
+ * Internet cannot forge it.
  */
-function clientIp(req: Request): string {
-  const socketIp = req.socket?.remoteAddress || '';
-  const forwardedIp = req.ip || socketIp;
-  if (forwardedIp && socketIp && forwardedIp !== socketIp && isPrivateHost(socketIp)) {
-    return forwardedIp;
-  }
-  return forwardedIp || socketIp || 'unknown';
+export function clientIp(req: Request): string {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
 }
+
+function isLanClient(req: Request): boolean {
+  const ip = clientIp(req).replace(/^::ffff:/i, '');
+  return ip !== 'unknown' && isPrivateHost(ip);
+}
+
+/** Global per-IP request budget (anti brute force / scraping). */
+function globalRateLimit(prefix: string, perMinute: () => number) {
+  return (req: Request, res: Response, next: () => void) => {
+    const rl = hitRateLimit(`${prefix}:${clientIp(req)}`, perMinute(), 60_000);
+    if (rl.limited) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec));
+      res.status(429).json({ error: `Trop de requêtes. Réessayez dans ${rl.retryAfterSec}s.` });
+      return;
+    }
+    next();
+  };
+}
+
+apiRouter.use('/public', globalRateLimit('public', () => config.PUBLIC_RATE_PER_MIN));
 
 function shareClientKey(req: Request): string {
   const ip = clientIp(req);
@@ -160,57 +186,106 @@ function pipeSegmentFile(file: string, contentType: string, res: Response, cache
   stream.pipe(res);
 }
 
-apiRouter.post('/login', (req, res) => {
-  const username = String(req.body?.username || 'admin').trim();
-  const password = String(req.body?.password || '');
-  const rateKey = `login:${clientIp(req)}:${username.toLowerCase()}`;
-
-  const rl = isRateLimited(rateKey);
-  if (rl.limited) {
-    res.setHeader('Retry-After', String(rl.retryAfterSec));
-    res.status(429).json({
-      error: `Trop de tentatives. Réessayez dans ${rl.retryAfterSec}s.`,
-    });
-    return;
-  }
-
-  const user = authenticate(username, password);
-  if (!user) {
-    recordFailedAttempt(rateKey);
-    res.status(401).json({ error: 'Identifiants incorrects' });
-    return;
-  }
-
-  clearFailedAttempts(rateKey);
-  const token = createSession(user);
-  res.cookie(config.COOKIE_NAME, token, {
+function sessionCookieOptions(req: Request) {
+  return {
     httpOnly: true,
-    sameSite: 'lax',
+    // Lax (not Strict) so opening the app from a link / the PWA keeps the session.
+    sameSite: 'lax' as const,
+    // Secure whenever the request arrived over HTTPS (directly or via a trusted proxy).
+    secure: req.secure,
     maxAge: config.SESSION_MAX_AGE_MS,
     path: '/',
-  });
-  res.json({ ok: true, user });
-});
+  };
+}
+
+apiRouter.post(
+  '/login',
+  globalRateLimit('login', () => config.LOGIN_RATE_PER_MIN),
+  (req, res) => {
+    const username = String(req.body?.username || 'admin').trim().slice(0, 128);
+    const password = String(req.body?.password || '');
+    const rateKey = `login:${clientIp(req)}:${username.toLowerCase()}`;
+    const accountKey = `account:${username.toLowerCase()}`;
+
+    const rl = isRateLimited(rateKey);
+    if (rl.limited) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec));
+      res.status(429).json({
+        error: `Trop de tentatives. Réessayez dans ${rl.retryAfterSec}s.`,
+      });
+      return;
+    }
+    // Per-account lockout (whatever the source IP). LAN clients are exempt from
+    // the lock itself so an Internet attacker cannot lock the owner out at home;
+    // they remain subject to the per-IP limit above.
+    const lock = isRateLimited(accountKey, config.ACCOUNT_LOCK_THRESHOLD, config.ACCOUNT_LOCK_MS);
+    if (lock.limited && !isLanClient(req)) {
+      res.setHeader('Retry-After', String(lock.retryAfterSec));
+      res.status(429).json({
+        error: `Compte temporairement verrouillé après trop d’échecs. Réessayez dans ${Math.ceil(lock.retryAfterSec / 60)} min.`,
+        code: 'ACCOUNT_LOCKED',
+      });
+      return;
+    }
+
+    const user = authenticate(username, password);
+    if (!user) {
+      recordFailedAttempt(rateKey);
+      recordFailedAttempt(accountKey, config.ACCOUNT_LOCK_MS);
+      res.status(401).json({ error: 'Identifiants incorrects' });
+      return;
+    }
+
+    clearFailedAttempts(rateKey);
+    clearFailedAttempts(accountKey);
+    const token = createSession(user, {
+      ip: clientIp(req),
+      userAgent: String(req.headers['user-agent'] || ''),
+    });
+    res.cookie(config.COOKIE_NAME, token, sessionCookieOptions(req));
+    const mustChange = !!user.must_change_password;
+    res.json({
+      ok: true,
+      user,
+      mustChangePassword: mustChange,
+      ...(mustChange
+        ? {
+            code: PASSWORD_CHANGE_REQUIRED,
+            message:
+              'Ce compte utilise encore le mot de passe par défaut : changez-le avant de continuer.',
+          }
+        : {}),
+    });
+  }
+);
 
 apiRouter.post('/logout', (req, res) => {
   destroySession(req.cookies?.[config.COOKIE_NAME]);
-  res.clearCookie(config.COOKIE_NAME, { path: '/' });
+  res.clearCookie(config.COOKIE_NAME, { path: '/', httpOnly: true, sameSite: 'lax', secure: req.secure });
   res.json({ ok: true });
 });
 
 apiRouter.get('/me', (req, res) => {
   const user = getSessionUser(req.cookies?.[config.COOKIE_NAME]);
-  res.json({ authenticated: !!user, user: user || null });
+  res.json({
+    authenticated: !!user,
+    user: user || null,
+    mustChangePassword: !!user?.must_change_password,
+    passwordMinLength: config.PASSWORD_MIN_LENGTH,
+  });
 });
 
 /**
- * Public, unauthenticated first-run hint for the login page: is the seeded
- * `admin` account still using its installation default password?
+ * First-run hint for the login page: is the seeded `admin` account still
+ * using its installation default password? Only revealed to LAN / loopback
+ * clients — from the Internet it would tell an attacker which password to try.
  */
-apiRouter.get('/setup/status', (_req, res) => {
+apiRouter.get('/setup/status', (req, res) => {
+  const lan = isLanClient(req);
   res.json({
-    defaultAdminUser: 'admin',
-    defaultAdminActive: isDefaultAdminPasswordActive(),
+    defaultAdminUser: lan ? 'admin' : null,
+    defaultAdminActive: lan ? isDefaultAdminPasswordActive() : false,
+    passwordMinLength: config.PASSWORD_MIN_LENGTH,
   });
 });
 
@@ -219,7 +294,20 @@ apiRouter.post('/me/password', requireAuth, (req, res) => {
     const user = okUser(req as AuthedRequest);
     const currentPassword = String(req.body?.currentPassword || '');
     const newPassword = String(req.body?.newPassword || '');
-    changeOwnPassword(user.id, currentPassword, newPassword);
+    const rateKey = `pwchange:${user.id}`;
+    const rl = isRateLimited(rateKey);
+    if (rl.limited) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec));
+      res.status(429).json({ error: `Trop de tentatives. Réessayez dans ${rl.retryAfterSec}s.` });
+      return;
+    }
+    try {
+      changeOwnPassword(user.id, currentPassword, newPassword, req.cookies?.[config.COOKIE_NAME]);
+    } catch (e) {
+      if (String(e).includes('actuel incorrect')) recordFailedAttempt(rateKey);
+      throw e;
+    }
+    clearFailedAttempts(rateKey);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
@@ -638,6 +726,7 @@ function authStreamOrToken(
     res.status(401).json({ error: 'Unauthorized' });
     return null;
   }
+  if (rejectIfPasswordChangeRequired(req, res, user)) return null;
   const item = getAccessibleMedia(user, mediaId);
   if (!item) {
     res.status(404).json({ error: 'Not found' });
@@ -888,11 +977,17 @@ apiRouter.get('/status', requireAuth, (req, res) => {
 });
 
 // ---- Shares ----
+/** Share row for its owner/admin: never send the password hash, only a flag. */
+function shareForOwner<T extends { password_hash?: string | null }>(s: T) {
+  const { password_hash, ...rest } = s;
+  return { ...rest, has_password: !!password_hash };
+}
+
 apiRouter.get('/shares', requireAuth, (req, res) => {
   const base = publicBase(req);
   const shares = listShares(okUser(req as AuthedRequest)).map((s) => {
     const url = `${base}/s/${s.token}`;
-    return { ...s, url, qrUrl: qrApiUrl(url) };
+    return { ...shareForOwner(s), url, qrUrl: qrApiUrl(url) };
   });
   res.json({ shares, publicBaseUrl: base });
 });
@@ -923,7 +1018,7 @@ apiRouter.post('/shares', requireAuth, (req, res) => {
     assertCanCreateShare(user, input);
     const share = createShare(input, publicBase(req));
     const url = share.url;
-    res.status(201).json({ ...share, url, qrUrl: qrApiUrl(url) });
+    res.status(201).json({ ...shareForOwner(share), url, qrUrl: qrApiUrl(url) });
   } catch (e) {
     res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
   }
@@ -1144,10 +1239,32 @@ apiRouter.put('/admin/settings/public-url', requireAuth, requireAdmin, (req, res
 });
 
 // ---- Public share helpers ----
+/** Where a client may present the signed share access token. */
+function shareAccessTokenFrom(req: Request, token: string): string | undefined {
+  const q = req.query.access;
+  if (typeof q === 'string' && q) return q;
+  const h = req.headers['x-share-access'];
+  if (typeof h === 'string' && h) return h;
+  const c = req.cookies?.[shareAccessCookieName(token)];
+  return typeof c === 'string' && c ? c : undefined;
+}
+
+/**
+ * Validate access to a public share. Password-protected shares accept, in order:
+ * a signed access token (?access=, X-Share-Access header or the per-share
+ * cookie set by POST …/unlock), the X-Share-Password header, and — only during
+ * the transition (SHARE_PASSWORD_QUERY_COMPAT, default on) — the legacy
+ * ?password= query. Generated URLs (HLS, .m3u, VLC) only ever carry `access=`.
+ */
 function checkPublicShareAccess(req: Request, res: Response) {
   const token = req.params.token;
+  const presentedAccess = shareAccessTokenFrom(req, token);
+  const headerPassword = req.headers['x-share-password'];
+  const queryPassword = config.SHARE_PASSWORD_QUERY_COMPAT ? req.query.password : undefined;
   const password =
-    (req.query.password as string) || (req.headers['x-share-password'] as string) || undefined;
+    (typeof headerPassword === 'string' && headerPassword) ||
+    (typeof queryPassword === 'string' && queryPassword) ||
+    undefined;
   const rateKey = `share:${clientIp(req)}:${token}`;
 
   const rl = isRateLimited(rateKey);
@@ -1160,7 +1277,7 @@ function checkPublicShareAccess(req: Request, res: Response) {
   }
 
   const cKey = shareClientKey(req);
-  const access = resolveShare(token, password, cKey);
+  const access = resolveShare(token, password, cKey, presentedAccess);
   if (!access.ok) {
     if (access.badPassword) {
       recordFailedAttempt(rateKey);
@@ -1168,15 +1285,38 @@ function checkPublicShareAccess(req: Request, res: Response) {
     res.status(403).json({ error: access.reason });
     return null;
   }
-  if (!access.needsPassword && password) {
-    clearFailedAttempts(rateKey);
+  let accessToken: string | undefined;
+  if (!access.needsPassword && access.share.password_hash) {
+    if (presentedAccess && verifyShareAccessToken(token, access.share.password_hash, presentedAccess)) {
+      accessToken = presentedAccess;
+    } else {
+      // Unlocked with the password (header / legacy query): mint a token so
+      // every URL we generate from now on is password-free.
+      clearFailedAttempts(rateKey);
+      accessToken = createShareAccessToken(token, access.share.password_hash).token;
+    }
   }
-  return { access, password, clientKey: cKey };
+  return { access, accessToken, clientKey: cKey };
+}
+
+/**
+ * Public view of a shared media item: never expose NAS file paths
+ * (`path` is absolute on the NAS, `rel_path` reveals the folder layout).
+ */
+export function publicShareItem(item: MediaItem) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { path: _p, rel_path: _r, library_id: _l, mtime: _m, ...rest } = item;
+  return rest;
+}
+
+/** Transcode status for anonymous clients: ffmpeg errors may contain NAS paths. */
+function publicTranscodeStatus<T extends { error?: string }>(st: T): T {
+  return st.error ? { ...st, error: 'Erreur de transcodage' } : st;
 }
 
 function enrichShareItem(item: MediaItem) {
   return {
-    ...item,
+    ...publicShareItem(item),
     playback: getPlaybackHint(item.filename || item.path, item.type),
   };
 }
@@ -1186,6 +1326,53 @@ function sendShareItemNotFound(res: Response): void {
 }
 
 // ---- Public share routes ----
+
+/**
+ * Exchange the share password (POST body, never a URL) for a short-lived
+ * signed access token. Browsers also get it as an httpOnly cookie scoped to
+ * /api/public/, so <video>/hls.js requests need nothing in the URL; native
+ * clients (Android, VLC links) pass it as ?access= or X-Share-Access.
+ */
+apiRouter.post('/public/share/:token/unlock', (req, res) => {
+  const token = req.params.token;
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const rateKey = `share:${clientIp(req)}:${token}`;
+  const rl = isRateLimited(rateKey);
+  if (rl.limited) {
+    res.setHeader('Retry-After', String(rl.retryAfterSec));
+    res.status(429).json({ error: `Trop de tentatives. Réessayez dans ${rl.retryAfterSec}s.` });
+    return;
+  }
+  const access = resolveShare(token, password || undefined, shareClientKey(req));
+  if (!access.ok) {
+    if (access.badPassword) recordFailedAttempt(rateKey);
+    res.status(403).json({ error: access.reason });
+    return;
+  }
+  if (access.needsPassword) {
+    res.status(400).json({ error: 'Mot de passe requis', needsPassword: true });
+    return;
+  }
+  if (!access.share.password_hash) {
+    res.json({ ok: true, accessToken: null, expiresAt: null, expiresInMs: null });
+    return;
+  }
+  clearFailedAttempts(rateKey);
+  const minted = createShareAccessToken(token, access.share.password_hash);
+  res.cookie(shareAccessCookieName(token), minted.token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.secure,
+    maxAge: config.SHARE_ACCESS_TTL_MS,
+    path: '/api/public/',
+  });
+  res.json({
+    ok: true,
+    accessToken: minted.token,
+    expiresAt: new Date(minted.expiresAt).toISOString(),
+    expiresInMs: config.SHARE_ACCESS_TTL_MS,
+  });
+});
 apiRouter.get('/public/share/:token', (req, res) => {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return;
@@ -1223,7 +1410,6 @@ apiRouter.get('/public/share/:token', (req, res) => {
     transcodeEnabled: isTranscodeEnabled(),
     targetType: access.share.target_type,
     shareTitle: access.title,
-    folderPath: access.share.folder_path,
     itemCount: items.length,
     shareUrl,
     qrUrl: qrApiUrl(shareUrl),
@@ -1234,7 +1420,7 @@ apiRouter.get('/public/share/:token', (req, res) => {
 function loadPublicShareItem(req: Request, res: Response) {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return null;
-  const { access, password, clientKey } = checked;
+  const { access, accessToken, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return null;
@@ -1245,7 +1431,7 @@ function loadPublicShareItem(req: Request, res: Response) {
     sendShareItemNotFound(res);
     return null;
   }
-  return { access, password, clientKey, item };
+  return { access, accessToken, clientKey, item };
 }
 
 apiRouter.get('/public/share/:token/item/:mediaId/stream', (req, res) => {
@@ -1277,10 +1463,10 @@ apiRouter.get('/public/share/:token/item/:mediaId/vlc', (req, res) => {
   const loaded = loadPublicShareItem(req, res);
   if (!loaded) return;
   const base = publicBase(req);
-  const streamUrl = buildShareRawStreamUrl(req.params.token, loaded.password, loaded.item.id, base);
+  const streamUrl = buildShareRawStreamUrl(req.params.token, loaded.accessToken, loaded.item.id, base);
   const m3uUrl =
     `${base}/api/public/share/${encodeURIComponent(req.params.token)}/item/${loaded.item.id}/playlist.m3u` +
-    (loaded.password ? `?password=${encodeURIComponent(loaded.password)}` : '');
+    (loaded.accessToken ? `?access=${encodeURIComponent(loaded.accessToken)}` : '');
   res.json({
     streamUrl,
     m3uUrl,
@@ -1296,7 +1482,7 @@ apiRouter.get('/public/share/:token/item/:mediaId/playlist.m3u', (req, res) => {
   if (!loaded) return;
   const streamUrl = buildShareRawStreamUrl(
     req.params.token,
-    loaded.password,
+    loaded.accessToken,
     loaded.item.id,
     publicBase(req)
   );
@@ -1334,12 +1520,12 @@ apiRouter.get('/public/share/:token/item/:mediaId/hls', (req, res) => {
     filename: loaded.item.filename || loaded.item.path,
   });
   const qsParts: string[] = [];
-  if (loaded.password) qsParts.push(`password=${encodeURIComponent(loaded.password)}`);
+  if (loaded.accessToken) qsParts.push(`access=${encodeURIComponent(loaded.accessToken)}`);
   const pq = profileQueryString(profile);
   if (pq) qsParts.push(pq);
   const qs = qsParts.length ? `?${qsParts.join('&')}` : '';
   res.json({
-    ...st,
+    ...publicTranscodeStatus(st),
     playlistUrl: `/api/public/share/${encodeURIComponent(req.params.token)}/item/${loaded.item.id}/hls/playlist.m3u8${qs}`,
     decision: { ...decision, modeLabel: modeLabel(decision.mode) },
   });
@@ -1360,7 +1546,7 @@ apiRouter.get('/public/share/:token/item/:mediaId/hls/playlist.m3u8', (req, res)
     filename: loaded.item.filename || loaded.item.path,
   });
   const segQs: string[] = [];
-  if (loaded.password) segQs.push(`password=${encodeURIComponent(loaded.password)}`);
+  if (loaded.accessToken) segQs.push(`access=${encodeURIComponent(loaded.accessToken)}`);
   const pq = profileQueryString(profile);
   if (pq) segQs.push(pq);
   const body = readPlaylist(loaded.item.id, segQs.join('&') || undefined, profile);
@@ -1533,7 +1719,7 @@ apiRouter.get('/public/download/:token', (req, res) => {
 apiRouter.get('/public/vlc/:token', (req, res) => {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return;
-  const { access, password } = checked;
+  const { access, accessToken } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -1541,10 +1727,10 @@ apiRouter.get('/public/vlc/:token', (req, res) => {
   const base = publicBase(req);
   const items = access.items;
   const mediaId = items.length > 1 ? items[0]?.id : undefined;
-  const streamUrl = buildShareRawStreamUrl(req.params.token, password, mediaId, base);
+  const streamUrl = buildShareRawStreamUrl(req.params.token, accessToken, mediaId, base);
   const m3uUrl =
     `${base}/api/public/playlist/${encodeURIComponent(req.params.token)}` +
-    (password ? `?password=${encodeURIComponent(password)}` : '');
+    (accessToken ? `?access=${encodeURIComponent(accessToken)}` : '');
   res.json({
     streamUrl,
     m3uUrl,
@@ -1558,7 +1744,7 @@ apiRouter.get('/public/vlc/:token', (req, res) => {
 apiRouter.get('/public/playlist/:token', (req, res) => {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return;
-  const { access, password } = checked;
+  const { access, accessToken } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -1570,11 +1756,11 @@ apiRouter.get('/public/playlist/:token', (req, res) => {
     body = buildMultiM3uContent(
       items.map((it) => ({
         title: it.title,
-        streamUrl: buildShareRawStreamUrl(req.params.token, password, it.id, base),
+        streamUrl: buildShareRawStreamUrl(req.params.token, accessToken, it.id, base),
       }))
     );
   } else {
-    const streamUrl = buildShareRawStreamUrl(req.params.token, password, items[0]?.id, base);
+    const streamUrl = buildShareRawStreamUrl(req.params.token, accessToken, items[0]?.id, base);
     body = buildM3uContent(access.title || items[0]?.title || 'share', streamUrl);
   }
   const fname = (access.title || access.media?.title || 'share').replace(/[^\w.\- ]+/g, '_');
@@ -1589,7 +1775,7 @@ apiRouter.get('/public/playlist/:token', (req, res) => {
 apiRouter.get('/public/hls/:token', (req, res) => {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return;
-  const { access, password, clientKey } = checked;
+  const { access, accessToken, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -1620,12 +1806,12 @@ apiRouter.get('/public/hls/:token', (req, res) => {
     filename: access.media.filename || access.media.path,
   });
   const qsParts: string[] = [];
-  if (password) qsParts.push(`password=${encodeURIComponent(password)}`);
+  if (accessToken) qsParts.push(`access=${encodeURIComponent(accessToken)}`);
   const pq = profileQueryString(profile);
   if (pq) qsParts.push(pq);
   const qs = qsParts.length ? `?${qsParts.join('&')}` : '';
   res.json({
-    ...st,
+    ...publicTranscodeStatus(st),
     playlistUrl: `/api/public/hls/${encodeURIComponent(req.params.token)}/playlist.m3u8${qs}`,
     decision: { ...decision, modeLabel: modeLabel(decision.mode) },
   });
@@ -1634,7 +1820,7 @@ apiRouter.get('/public/hls/:token', (req, res) => {
 apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
   const checked = checkPublicShareAccess(req, res);
   if (!checked) return;
-  const { access, password, clientKey } = checked;
+  const { access, accessToken, clientKey } = checked;
   if (access.needsPassword) {
     res.status(401).json({ error: 'Password required', needsPassword: true });
     return;
@@ -1655,7 +1841,7 @@ apiRouter.get('/public/hls/:token/playlist.m3u8', (req, res) => {
     filename: access.media.filename || access.media.path,
   });
   const segQs: string[] = [];
-  if (password) segQs.push(`password=${encodeURIComponent(password)}`);
+  if (accessToken) segQs.push(`access=${encodeURIComponent(accessToken)}`);
   const pq = profileQueryString(profile);
   if (pq) segQs.push(pq);
   const body = readPlaylist(access.media.id, segQs.join('&') || undefined, profile);

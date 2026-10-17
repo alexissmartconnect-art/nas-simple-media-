@@ -85,9 +85,13 @@ export function buildRawStreamUrl(mediaId: number, token: string, baseUrl?: stri
   return `${publicBase(baseUrl)}/api/stream/${mediaId}/raw?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Public stream URL for a share. `accessToken` is the short-lived signed share
+ * access token (never the share password) for password-protected shares.
+ */
 export function buildShareRawStreamUrl(
   shareToken: string,
-  password?: string,
+  accessToken?: string,
   mediaId?: number,
   baseUrl?: string
 ): string {
@@ -96,7 +100,7 @@ export function buildShareRawStreamUrl(
     mediaId != null
       ? `${base}/api/public/share/${encodeURIComponent(shareToken)}/item/${mediaId}/stream`
       : `${base}/api/public/stream/${encodeURIComponent(shareToken)}`;
-  if (password) url += `?password=${encodeURIComponent(password)}`;
+  if (accessToken) url += `?access=${encodeURIComponent(accessToken)}`;
   return url;
 }
 

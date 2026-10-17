@@ -42,9 +42,11 @@ class PlaybackPlannerTest {
         assertEquals("/api/stream/5/hls", MediaSource.Session.hlsStartPath(5, "original", 0))
         assertEquals("/api/stream/5/hls?quality=720p&audio=1", MediaSource.Session.hlsStartPath(5, "720p", 1))
         assertEquals("/api/stream/5/raw", MediaSource.Session.rawPath(5))
-        val s = MediaSource.Share("tok", "p w")
-        assertEquals("/api/public/share/tok/item/7/hls?quality=480p&password=p%20w", s.hlsStartPath(7, "480p", 0))
-        assertEquals("/api/public/share/tok/item/7/stream?password=p%20w", s.rawPath(7))
+        // Signed access token from /unlock — the share password never appears in a URL.
+        val s = MediaSource.Share("tok", "v1.k9.sig")
+        assertEquals("/api/public/share/tok/item/7/hls?quality=480p&access=v1.k9.sig", s.hlsStartPath(7, "480p", 0))
+        assertEquals("/api/public/share/tok/item/7/stream?access=v1.k9.sig", s.rawPath(7))
+        assertEquals(false, s.rawPath(7).contains("password"))
         assertEquals("/api/public/share/tok/item/7/thumb.jpg", MediaSource.Share("tok", null).thumbPath(7))
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "nas-simple-media",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Simple free Plex-like media server for Synology NAS — movies, music, TV series, ffmpeg Compatible playback, VLC/download",
   "main": "dist/index.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "tsx watch src/index.ts",
     "spk": "node synology/build-spk.mjs",
     "spk:keep": "node synology/build-spk.mjs --keep-staging",
-    "test": "tsx --test tests/heuristics.test.ts tests/token.test.ts tests/formats.test.ts tests/streamTokens.test.ts tests/sqlite.test.ts tests/spk.test.ts tests/probe.test.ts tests/decision.test.ts tests/profiles.test.ts tests/playback.test.ts tests/sort.test.ts tests/explorer.test.ts tests/ui.test.ts tests/tailscale.test.ts tests/api.test.ts tests/pwa.test.ts"
+    "test": "tsx --test tests/heuristics.test.ts tests/token.test.ts tests/formats.test.ts tests/streamTokens.test.ts tests/sqlite.test.ts tests/spk.test.ts tests/probe.test.ts tests/decision.test.ts tests/profiles.test.ts tests/playback.test.ts tests/sort.test.ts tests/explorer.test.ts tests/ui.test.ts tests/tailscale.test.ts tests/api.test.ts tests/pwa.test.ts tests/security.test.ts"
   },
   "engines": {
     "node": ">=18"
@@ -26,6 +26,7 @@
     "better-sqlite3": "^11.7.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2",
+    "helmet": "^8.3.0",
     "mime-types": "^2.1.35",
     "qrcode": "^1.5.4"
   },

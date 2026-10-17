@@ -14,16 +14,26 @@
 6. [Organisation des dossiers](#organisation-des-dossiers)
 7. [Installation Synology (Container Manager)](#installation-synology-container-manager)
 8. [Installation native Synology (paquet SPK, DSM 7)](#installation-native-synology-paquet-spk-dsm-7)
-9. [Accès distant (Bouygues / CGNAT)](#accès-distant-bouygues--cgnat)
+9. [Accès distant (Internet / 4G / 5G)](#accès-distant-internet--4g--5g)
 10. [Appli mobile (PWA)](#appli-mobile-pwa)
-11. [Variables d'environnement](#variables-denvironnement)
-12. [Développement local](#développement-local)
-13. [Parité Plex & limites](#parité-plex--limites)
-14. [Appli Android (téléphone & Android TV)](#appli-android-téléphone--android-tv)
+11. [Sécurité](#sécurité)
+12. [Variables d'environnement](#variables-denvironnement)
+13. [Développement local](#développement-local)
+14. [Parité Plex & limites](#parité-plex--limites)
+15. [Appli Android (téléphone & Android TV)](#appli-android-téléphone--android-tv)
 
 📘 **Mode opératoire pas-à-pas (admin & invités) : [docs/DOP.md](docs/DOP.md)**
 
 ---
+
+## Nouveautés 1.6.0 — Sécurité (phase 0)
+
+- Le mot de passe d’usine **`changeme` doit être changé à la première connexion** (imposé par le serveur).
+- **10 caractères minimum** pour tout nouveau mot de passe (les mots de passe existants restent valables).
+- **Sessions persistantes** (SQLite) : un redémarrage du NAS ne déconnecte plus ; la déconnexion les invalide vraiment.
+- Mot de passe de partage **plus jamais dans les URL** (jeton signé de courte durée), réponses publiques sans chemins NAS.
+- CSP stricte, HSTS en HTTPS, cookie `Secure` en HTTPS, proxys de confiance limités (`TRUST_PROXY_HOPS`),
+  limites de débit + verrouillage de compte, image Docker **non-root**. Détails : [Sécurité](#sécurité).
 
 ## Nouveautés 1.5.1 — Diagnostic Tailscale en lecture seule
 
@@ -123,7 +133,10 @@ Les navigateurs **ne décodent pas** le DTS / TrueHD / AC-3 en bitstream (aucun 
 
 ### Premier démarrage
 
-- Compte **`admin`** avec le mot de passe `ADMIN_PASSWORD`.
+- Compte **`admin`** avec le mot de passe `ADMIN_PASSWORD` (par défaut `changeme`).
+- Si le compte utilise encore `changeme`, la page de connexion demande **immédiatement un nouveau mot de passe**
+  (10 caractères minimum) : tant que ce n’est pas fait, le serveur refuse toutes les autres requêtes
+  (`403 PASSWORD_CHANGE_REQUIRED`). L’appli Android affiche un message demandant de le faire dans le navigateur.
 - Bibliothèques par défaut : `Films` → `Movies/`, `Séries` → `Series/`, `Musique` → `Music/` (sous `MEDIA_PATH`).
 
 ### Rôles
@@ -166,7 +179,18 @@ TRANSCODE_ENABLED=true
 TRANSCODE_MAX_JOBS=1
 ```
 
-3. Adaptez `docker-compose.yml` (chemins host).
+3. Adaptez `docker-compose.yml` (chemins host). L’image tourne en utilisateur **non-root `node` (uid 1000)** :
+   le dossier data de l’hôte doit lui appartenir (une fois) :
+
+```bash
+sudo mkdir -p /volume1/docker/nas-simple-media/data
+sudo chown -R 1000:1000 /volume1/docker/nas-simple-media/data
+```
+
+   (Ou décommentez `user: "<uid>:<gid>"` dans le compose avec votre compte DSM.) Pour le transcodage
+   matériel, ajoutez `group_add` avec le gid de `/dev/dri/renderD128` (`ls -n /dev/dri`).
+   **Mode proxy uniquement** : remplacez `"8096:8096"` par `"127.0.0.1:8096:8096"` pour que seul le proxy
+   inversé DSM / Tailscale serve du NAS joigne l’appli (le port n’est alors plus accessible depuis le LAN).
 4. Build & start :
 
 ```bash
@@ -174,7 +198,7 @@ cd /volume1/docker/nas-simple-media
 sudo docker compose up -d --build
 ```
 
-5. Ouvrez `http://IP-NAS:8096` → `admin` / votre mot de passe.
+5. Ouvrez `http://IP-NAS:8096` → `admin` / votre mot de passe (si c’est `changeme`, choisissez-en un nouveau).
 6. **Admin · Bibliothèques** → Rescan ; **Admin · Comptes** → grants.
 
 L’image Docker installe **ffmpeg**. Pare-feu DSM : **8096/TCP** en LAN. Pour Internet : Tailscale ou Cloudflare Tunnel.
@@ -266,7 +290,7 @@ Identiques à la section [Variables d’environnement](#variables-denvironnement
 npm ci
 npm test          # 122 tests
 npm run build
-npm run spk       # -> dist-spk/nas-simple-media-1.5.1-geminilake.spk
+npm run spk       # -> dist-spk/nas-simple-media-1.6.0-geminilake.spk
 ```
 
 Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié sur
@@ -296,8 +320,10 @@ HTTPS gratuit (Let's Encrypt), le port 8096 n'est **jamais** exposé à Internet
 
 Box → NAT/PAT : port externe `8096` → IP locale du NAS (`TCP`), puis utiliser
 `http://<ip-publique>:8096` (l'IP publique est détectée par le panneau réseau). Trafic HTTP
-en clair : à éviter hors test. Si le port 8096 est exposé directement, `TRUST_PROXY=0`
-empêche qu'un client forge les en-têtes `X-Forwarded-*`.
+en clair : à éviter hors test. Les en-têtes `X-Forwarded-*` ne sont crus que s'ils viennent d'un proxy
+local (`TRUST_PROXY_HOPS`, par défaut loopback / lien-local / adresses privées) : un client Internet
+ne peut donc pas falsifier son IP. Le mot de passe de connexion circule toutefois en clair sur HTTP :
+préférez l'option 1 ou 3.
 
 ### Option 3 — Sans ouvrir de port (Tailscale / Cloudflare Tunnel)
 
@@ -357,6 +383,36 @@ au lieu du CDN jsDelivr.
 
 ---
 
+## Sécurité
+
+Ce qui est en place (1.6.0) :
+
+| Sujet | Comportement |
+|-------|--------------|
+| Mot de passe d’usine | `changeme` doit être changé à la première connexion ; le serveur bloque tout le reste (`403 PASSWORD_CHANGE_REQUIRED`) |
+| Mots de passe | ≥ 10 caractères pour toute création / modification ; refus des variantes de `changeme` ; les anciens mots de passe courts restent acceptés à la connexion |
+| Sessions | Table SQLite `sessions` (seul le SHA-256 du jeton est stocké), expiration 7 jours, déconnexion = suppression, changement de mot de passe = déconnexion des autres appareils, compte désactivé = sessions supprimées |
+| Cookie | `HttpOnly`, `SameSite=Lax`, `Secure` dès que la requête arrive en HTTPS (direct ou via un proxy de confiance) |
+| En-têtes | `helmet` : CSP stricte (aucun script inline, `frame-ancestors 'none'`, workers/médias `blob:` pour hls.js), `X-Frame-Options: DENY`, `nosniff`, HSTS **seulement en HTTPS** (jamais sur `http://IP:8096`) |
+| Proxy | `TRUST_PROXY_HOPS` : seuls les proxys locaux sont crus → IP réelle pour les limites de débit, impossible à falsifier depuis Internet |
+| Force brute | Limite par IP sur `/api/login` (20/min) et `/api/public/*` (600/min), 10 essais par IP+compte / 5 min, verrouillage du compte 15 min après 10 échecs depuis Internet (le réseau local n’est jamais verrouillé) |
+| Partages | Le mot de passe est envoyé une fois (`POST /api/public/share/<jeton>/unlock`) puis remplacé par un jeton signé de 12 h (cookie `HttpOnly` limité à `/api/public/` + `?access=` pour VLC/HLS/m3u) ; plus aucun chemin NAS ni hash dans les réponses |
+| Premier démarrage | `/api/setup/status` n’indique l’état du mot de passe par défaut qu’aux clients du réseau local |
+| Docker | Image non-root (`USER node`), option `127.0.0.1:8096:8096` pour le mode proxy uniquement |
+
+**Changements à connaître en mettant à jour :**
+- Docker : faire le `chown -R 1000:1000` du dossier data (sinon le conteneur refuse de démarrer avec un message explicite).
+- Comptes encore en `changeme` : changement obligatoire à la prochaine connexion. Les appareils déjà connectés
+  avant la mise à jour doivent se reconnecter une fois (les sessions passent de la mémoire à SQLite).
+- Liens de partage protégés : les liens `/s/<jeton>` ne changent pas. Les anciens liens VLC / `.m3u`
+  contenant `?password=` fonctionnent encore pendant la transition (`SHARE_PASSWORD_QUERY_COMPAT=1`) ; les
+  nouveaux contiennent `?access=…` et expirent au bout de 12 h (régénérez la playlist ensuite).
+- L’appli Android 0.2.0 est nécessaire pour ouvrir les partages protégés via le nouveau flux (les versions
+  précédentes passent encore par `?password=` tant que la compatibilité est active).
+
+Reste à faire (hors phase 0) : HTTPS natif sans proxy, 2FA, journal d’audit des connexions, liste/révocation
+des sessions dans l’interface, suppression définitive de `?password=`.
+
 ## Variables d'environnement
 
 | Variable | Défaut | Description |
@@ -366,7 +422,16 @@ au lieu du CDN jsDelivr.
 | `PORT` | `8096` | Port HTTP |
 | `ADMIN_PASSWORD` | `changeme` | Mot de passe initial `admin` |
 | `PUBLIC_BASE_URL` | `http://localhost:8096` | Base des liens partage / VLC (ex. `https://mon-nas.synology.me`) |
-| `TRUST_PROXY` | `1` | `0` pour ignorer `X-Forwarded-Proto`/`Host` (port 8096 exposé directement) |
+| `TRUST_PROXY_HOPS` | `loopback, linklocal, uniquelocal` | Proxys autorisés à fixer `X-Forwarded-For/Proto/Host` : liste de sous-réseaux (syntaxe Express), nombre de sauts (`1`), ou `0`/`false` = personne. Jamais « tout le monde » |
+| `TRUST_PROXY` | `1` | Ancien réglage : `0` = `TRUST_PROXY_HOPS=0`, `1` = défaut sûr ci-dessus |
+| `SESSION_SECRET` | *(généré)* | Secret HMAC (jetons de partage). Absent → 256 bits aléatoires dans `DATA_PATH/session.secret` (mode 600) |
+| `PASSWORD_MIN_LENGTH` | `10` | Longueur minimale des nouveaux mots de passe (min. 8) |
+| `LOGIN_RATE_PER_MIN` | `20` | Requêtes `/api/login` max par IP et par minute |
+| `PUBLIC_RATE_PER_MIN` | `600` | Requêtes `/api/public/*` max par IP et par minute (HLS compris) |
+| `ACCOUNT_LOCK_THRESHOLD` | `10` | Échecs (toutes IP confondues) avant verrouillage du compte |
+| `ACCOUNT_LOCK_MS` | `900000` | Durée du verrouillage (15 min) — ne s’applique pas aux clients du réseau local |
+| `SHARE_ACCESS_TTL_MS` | `43200000` | Durée du jeton d’accès obtenu avec le mot de passe d’un partage (12 h) |
+| `SHARE_PASSWORD_QUERY_COMPAT` | `1` | Transition : accepte encore `?password=` sur les anciens liens (`0` pour refuser) |
 | `ENABLE_WATCH` | `1` | `0` pour couper le file watch |
 | `TRANSCODE_ENABLED` | `true` | Active le mode Compatible (HLS) |
 | `FFMPEG_PATH` | `ffmpeg` | Binaire ffmpeg |
@@ -459,7 +524,8 @@ Code source : [`android/`](android/).
   *Auto* lit le fichier original quand l'appareil sait le décoder, sinon passe par le remux/transcodage
   HLS du serveur (DTS, TrueHD, AVI…) ; si la lecture directe échoue, l'appli bascule seule en HLS.
 - **Liens de partage** `https://…/s/<jeton>` : ils s'ouvrent dans l'appli en **invité**
-  (mot de passe du partage demandé si besoin). On peut aussi coller un lien depuis l'écran des serveurs.
+  (mot de passe du partage demandé si besoin, envoyé une seule fois au serveur puis remplacé
+  par un jeton temporaire : il n'apparaît jamais dans les URL de lecture). On peut aussi coller un lien depuis l'écran des serveurs.
 - **Android TV** : icône dans le lanceur TV (bannière), navigation à la **télécommande (D-pad)**,
   cartes Compose for TV avec mise en avant du focus ; dans le lecteur, bouton **Options** de la barre
   de contrôle (ou touche Menu) pour la qualité, l'audio et les sous-titres.
@@ -493,8 +559,10 @@ L'APK est produit par GitHub Actions (onglet *Actions* → *Android APK* → der
 **Limites actuelles** : pas encore d'affiches/métadonnées en ligne (vignettes extraites des vidéos),
 pas de Chromecast ni de téléchargement hors-ligne, pas d'écran d'administration dans l'appli ;
 en HLS transcodé, avancer au-delà de la partie déjà transcodée attend que le serveur la produise
-(le transcodage repart du début). La session est en mémoire sur le serveur : après un redémarrage
-du NAS, l'appli se reconnecte seule si le mot de passe a été mémorisé, sinon elle redemande la connexion.
+(le transcodage repart du début). Les sessions sont conservées par le serveur (SQLite) : un redémarrage
+du NAS ne déconnecte plus l'appli ; si la session expire (7 jours), l'appli se reconnecte seule si le mot
+de passe a été mémorisé. Un compte encore en `changeme` ne peut pas se connecter depuis l'appli : un message
+demande de changer le mot de passe dans le navigateur (`http://<NAS>:8096/login.html`), puis de se reconnecter.
 
 ## Licence
 

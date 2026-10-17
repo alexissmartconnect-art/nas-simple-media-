@@ -6,6 +6,9 @@ import { openDatabase, type SqliteDatabase } from './sqlite';
 
 let db: SqliteDatabase | null = null;
 
+/** The well-known factory password; any account still using it must change it. */
+export const DEFAULT_ADMIN_PASSWORD = 'changeme';
+
 export function getDb(): SqliteDatabase {
   if (db) return db;
   db = openDatabase(config.DB_PATH);
@@ -132,8 +135,31 @@ function initSchema(database: SqliteDatabase): void {
       FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_progress_user_updated ON playback_progress(user_id, updated_at);
+
+    -- Login sessions (persisted so a restart does not log everybody out).
+    -- Only a SHA-256 of the cookie value is stored: a leaked DB does not leak sessions.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      ip TEXT,
+      user_agent TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
   `);
   migrateSharesTableIfNeeded(database);
+  migrateUsersTableIfNeeded(database);
+}
+
+/** Add users.must_change_password (forced change of the default "changeme" password). */
+function migrateUsersTableIfNeeded(database: SqliteDatabase): void {
+  const cols = database.prepare(`PRAGMA table_info(users)`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'must_change_password')) {
+    database.exec(`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 function migrateSharesTableIfNeeded(database: SqliteDatabase): void {
@@ -189,10 +215,10 @@ function seedDefaults(database: SqliteDatabase): void {
   if (!admin) {
     database
       .prepare(
-        `INSERT INTO users (username, password_hash, role, enabled, can_share)
-         VALUES (?, ?, 'admin', 1, 1)`
+        `INSERT INTO users (username, password_hash, role, enabled, can_share, must_change_password)
+         VALUES (?, ?, 'admin', 1, 1, ?)`
       )
-      .run('admin', hashPassword(config.ADMIN_PASSWORD));
+      .run('admin', hashPassword(config.ADMIN_PASSWORD), config.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD ? 1 : 0);
   }
 
   const libCount = (database.prepare(`SELECT COUNT(*) as c FROM libraries`).get() as { c: number }).c;
@@ -231,6 +257,7 @@ export interface UserRow {
   role: 'admin' | 'user';
   enabled: number;
   can_share: number;
+  must_change_password?: number;
   created_at: string;
   updated_at: string;
 }
@@ -295,6 +322,8 @@ export type SessionUser = {
   username: string;
   role: 'admin' | 'user';
   can_share: boolean;
+  /** True while the account still uses the factory password: only /api/me* is allowed. */
+  must_change_password?: boolean;
 };
 
 export interface MediaProbeRow {

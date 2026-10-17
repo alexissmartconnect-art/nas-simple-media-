@@ -1,3 +1,4 @@
+import { verifyShareAccessToken } from './shareAccess';
 import { getDb, type MediaItem, type ShareRow, type SessionUser, type ShareTargetType } from '../db/schema';
 import { generateToken } from '../scanner/heuristics';
 import { hashSharePassword, verifySharePassword } from '../auth/passwords';
@@ -329,7 +330,16 @@ export type ShareAccess =
     }
   | { ok: false; reason: string; badPassword?: boolean };
 
-export function resolveShare(token: string, password?: string, clientKey?: string): ShareAccess {
+/**
+ * Resolve a public share. A password-protected share is unlocked either by a
+ * valid signed access token (see shareAccess.ts) or by the password itself.
+ */
+export function resolveShare(
+  token: string,
+  password?: string,
+  clientKey?: string,
+  accessToken?: string
+): ShareAccess {
   const db = getDb();
   const share = db.prepare('SELECT * FROM shares WHERE token = ?').get(token) as ShareRow | undefined;
   if (!share) return { ok: false, reason: 'Lien introuvable' };
@@ -357,6 +367,9 @@ export function resolveShare(token: string, password?: string, clientKey?: strin
   }
 
   if (share.password_hash) {
+    if (accessToken && verifyShareAccessToken(token, share.password_hash, accessToken)) {
+      return { ok: true, share, media, items, title, needsPassword: false };
+    }
     if (!password) return { ok: true, share, media, items: [], title, needsPassword: true };
     if (!verifySharePassword(password, share.password_hash)) {
       return { ok: false, reason: 'Mot de passe incorrect', badPassword: true };

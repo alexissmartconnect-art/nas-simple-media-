@@ -25,7 +25,7 @@
     <string name="login_password">Mot de passe</string>
     <string name="login_remember">Se souvenir du mot de passe (chiffré sur l’appareil)</string>
     <string name="login_submit">Se connecter</string>
-    <string name="login_default_admin">Le compte admin utilise encore le mot de passe par défaut : changez-le depuis l’interface web avant d’ouvrir le serveur sur Internet.</string>
+    <string name="login_default_admin">Le compte admin utilise encore le mot de passe par défaut (changeme) : le serveur exige de le changer d’abord dans l’interface web (navigateur → /login.html). Reconnectez-vous ensuite ici avec le nouveau mot de passe.</string>
     <string name="logout">Se déconnecter</string>
     <string name="change_server">Changer de serveur</string>
 

@@ -90,7 +90,7 @@ class PlayerActivity : ComponentActivity() {
 
     private lateinit var base: String
     private var shareToken: String? = null
-    private var sharePassword: String? = null
+    private var shareAccess: String? = null
     private var transcodeEnabled = true
     private lateinit var queue: List<MediaItem>
     private var index = 0
@@ -112,7 +112,7 @@ class PlayerActivity : ComponentActivity() {
     private var titleText by mutableStateOf("")
 
     private val source: MediaSource
-        get() = shareToken?.let { MediaSource.Share(it, sharePassword) } ?: MediaSource.Session
+        get() = shareToken?.let { MediaSource.Share(it, shareAccess) } ?: MediaSource.Session
     private val isGuest get() = shareToken != null
     private val current get() = queue[index]
 
@@ -121,7 +121,7 @@ class PlayerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         base = intent.getStringExtra(PlayerLauncher.EXTRA_BASE) ?: Session.baseUrl ?: run { finish(); return }
         shareToken = intent.getStringExtra(PlayerLauncher.EXTRA_SHARE_TOKEN)
-        sharePassword = intent.getStringExtra(PlayerLauncher.EXTRA_SHARE_PASSWORD)
+        shareAccess = intent.getStringExtra(PlayerLauncher.EXTRA_SHARE_ACCESS)
         transcodeEnabled = intent.getBooleanExtra(PlayerLauncher.EXTRA_TRANSCODE, true)
         queue = Json { ignoreUnknownKeys = true }.decodeFromString(intent.getStringExtra(PlayerLauncher.EXTRA_QUEUE) ?: "[]")
         if (queue.isEmpty()) { finish(); return }

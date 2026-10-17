@@ -1,4 +1,4 @@
-import { getDb, type UserRow, type SessionUser } from '../db/schema';
+import { getDb, DEFAULT_ADMIN_PASSWORD, type UserRow, type SessionUser } from '../db/schema';
 import { config } from '../config';
 import { hashPassword, verifyPassword } from '../auth/passwords';
 import { destroyUserSessions, updateUserSessions } from '../auth/session';
@@ -11,8 +11,23 @@ export function publicUser(u: UserRow) {
     role: u.role,
     enabled: !!u.enabled,
     can_share: !!u.can_share,
+    must_change_password: !!u.must_change_password,
     created_at: u.created_at,
   };
+}
+
+/**
+ * Policy for NEW or CHANGED passwords only (existing hashes keep working, so
+ * nobody is locked out by the stricter rule). Returns an error message or null.
+ */
+export function passwordPolicyError(password: string | undefined | null): string | null {
+  const min = config.PASSWORD_MIN_LENGTH;
+  if (!password || password.length < min) return `Mot de passe trop court (min ${min} caractères)`;
+  if (password.length > 512) return 'Mot de passe trop long (max 512 caractères)';
+  if (password.toLowerCase().includes(DEFAULT_ADMIN_PASSWORD)) {
+    return 'Ce mot de passe est trop proche du mot de passe par défaut';
+  }
+  return null;
 }
 
 export function authenticate(username: string, password: string): SessionUser | null {
@@ -22,7 +37,19 @@ export function authenticate(username: string, password: string): SessionUser | 
     .get(username.trim()) as UserRow | undefined;
   if (!u || !u.enabled) return null;
   if (!verifyPassword(password, u.password_hash)) return null;
-  return { id: u.id, username: u.username, role: u.role, can_share: !!u.can_share };
+  let mustChange = !!u.must_change_password;
+  if (!mustChange && password === DEFAULT_ADMIN_PASSWORD) {
+    // Existing installs that still use the factory password: force a change.
+    db.prepare(`UPDATE users SET must_change_password = 1 WHERE id = ?`).run(u.id);
+    mustChange = true;
+  }
+  return {
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    can_share: !!u.can_share,
+    must_change_password: mustChange,
+  };
 }
 
 export function listUsers() {
@@ -41,7 +68,8 @@ export function createUser(input: {
 }) {
   const username = input.username.trim();
   if (!username || username.length < 2) throw new Error("Nom d'utilisateur trop court");
-  if (!input.password || input.password.length < 4) throw new Error('Mot de passe trop court (min 4)');
+  const pwErr = passwordPolicyError(input.password);
+  if (pwErr) throw new Error(pwErr);
   const db = getDb();
   try {
     const info = db
@@ -75,8 +103,9 @@ export function updateUser(
   const u = getUser(id);
   if (!u) throw new Error('Utilisateur introuvable');
 
-  if (patch.password !== undefined && patch.password !== '' && patch.password.length < 4) {
-    throw new Error('Mot de passe trop court (min 4)');
+  if (patch.password !== undefined && patch.password !== '') {
+    const pwErr = passwordPolicyError(patch.password);
+    if (pwErr) throw new Error(pwErr);
   }
 
   if (patch.enabled === false && u.role === 'admin') {
@@ -103,6 +132,7 @@ export function updateUser(
       role = ?,
       enabled = ?,
       can_share = ?,
+      must_change_password = ?,
       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
@@ -110,6 +140,7 @@ export function updateUser(
     patch.role ?? u.role,
     patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : u.enabled,
     patch.can_share !== undefined ? (patch.can_share ? 1 : 0) : u.can_share,
+    patch.password ? 0 : u.must_change_password ? 1 : 0,
     id
   );
 
@@ -152,19 +183,26 @@ export function deleteUser(id: number, actorId?: number): boolean {
 export function changeOwnPassword(
   userId: number,
   currentPassword: string,
-  newPassword: string
+  newPassword: string,
+  keepSessionToken?: string
 ): void {
   const u = getUser(userId);
   if (!u || !u.enabled) throw new Error('Utilisateur introuvable');
   if (!verifyPassword(currentPassword, u.password_hash)) {
     throw new Error('Mot de passe actuel incorrect');
   }
-  if (!newPassword || newPassword.length < 4) {
-    throw new Error('Nouveau mot de passe trop court (min 4)');
+  const pwErr = passwordPolicyError(newPassword);
+  if (pwErr) throw new Error('Nouveau mot de passe invalide : ' + pwErr.charAt(0).toLowerCase() + pwErr.slice(1));
+  if (newPassword === currentPassword) {
+    throw new Error("Le nouveau mot de passe doit être différent de l'actuel");
   }
   getDb()
-    .prepare(`UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?`)
+    .prepare(
+      `UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = datetime('now') WHERE id = ?`
+    )
     .run(hashPassword(newPassword), userId);
+  // Log out every other device; the current session stays valid.
+  destroyUserSessions(userId, keepSessionToken);
 }
 
 export function setUserLibraries(userId: number, libraryIds: number[]): void {

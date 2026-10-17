@@ -37,50 +37,32 @@
       <button class="btn btn-primary" type="submit" style="width:100%">Se connecter</button>
       <p class="muted first-run-hint hidden" id="firstRunHint"></p>
     </form>
+    <form class="login-card hidden" id="changeForm">
+      <div class="brand" style="margin-bottom:1rem">
+        <div class="brand-badge">🔑</div>
+        <span>NAS Simple Media</span>
+      </div>
+      <h1>Nouveau mot de passe obligatoire</h1>
+      <p>Ce compte utilise encore le mot de passe par défaut. Choisissez-en un nouveau pour continuer
+        (au moins <strong id="minLen">10</strong> caractères). Les autres appareils connectés seront déconnectés.</p>
+      <div class="field" id="curPwdField">
+        <label for="curPassword">Mot de passe actuel</label>
+        <input id="curPassword" type="password" autocomplete="current-password" />
+      </div>
+      <div class="field">
+        <label for="newPassword">Nouveau mot de passe</label>
+        <input id="newPassword" type="password" autocomplete="new-password" required minlength="10" />
+      </div>
+      <div class="field">
+        <label for="newPassword2">Confirmer le nouveau mot de passe</label>
+        <input id="newPassword2" type="password" autocomplete="new-password" required minlength="10" />
+      </div>
+      <p class="error hidden" id="changeError"></p>
+      <button class="btn btn-primary" type="submit" style="width:100%">Enregistrer et continuer</button>
+      <button class="btn btn-ghost" type="button" id="changeLogout" style="width:100%;margin-top:.5rem">Se déconnecter</button>
+    </form>
   </div>
-  <script>
-    (async () => {
-      const params = new URLSearchParams(location.search);
-      const preset = params.get('user') || params.get('username');
-      if (preset) document.getElementById('username').value = preset;
-      try {
-        const me = await fetch('/api/me').then(r => r.json());
-        if (me.authenticated) location.href = '/';
-      } catch {}
-      // First run: tell the owner (quietly) that the default account is still active.
-      try {
-        const setup = await fetch('/api/setup/status').then(r => r.json());
-        if (setup && setup.defaultAdminActive) {
-          const hint = document.getElementById('firstRunHint');
-          hint.innerHTML =
-            'Première connexion : identifiant <strong>' +
-            String(setup.defaultAdminUser || 'admin') +
-            '</strong>, mot de passe <strong>changeme</strong> — pensez à le changer une fois connecté (🔑 Mot de passe).';
-          hint.classList.remove('hidden');
-        }
-      } catch {}
-    })();
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const err = document.getElementById('error');
-      err.classList.add('hidden');
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: document.getElementById('username').value,
-          password: document.getElementById('password').value
-        })
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        err.textContent = data.error || 'Échec de connexion';
-        err.classList.remove('hidden');
-        return;
-      }
-      location.href = '/';
-    });
-  </script>
+  <script src="/js/login.js"></script>
   <script src="/js/pwa.js" defer></script>
 </body>
 </html>

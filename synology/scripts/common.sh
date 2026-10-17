@@ -187,10 +187,12 @@ ADMIN_PASSWORD=changeme
 # Can also be set from the UI: Administration -> "Acces externe & Reseau".
 PUBLIC_BASE_URL=http://localhost:${APP_PORT}
 
-# Trust reverse-proxy headers (X-Forwarded-Proto / X-Forwarded-Host / Forwarded)
-# set by the DSM Reverse Proxy, Cloudflare Tunnel, Tailscale or nginx.
-# Set to 0 only if port ${APP_PORT} is exposed directly to the Internet.
+# Trust reverse-proxy headers (X-Forwarded-For / -Proto / -Host) only from local
+# proxies (DSM Reverse Proxy, Tailscale serve, nginx on the NAS): loopback,
+# link-local and private addresses. An Internet client can never spoof its IP.
+# TRUST_PROXY=0 disables it; TRUST_PROXY_HOPS=<n> or a subnet list overrides it.
 TRUST_PROXY=1
+# TRUST_PROXY_HOPS=loopback, linklocal, uniquelocal
 
 # "Compatible" mode transcodes to HLS with ffmpeg. Disable to save CPU.
 TRANSCODE_ENABLED=true

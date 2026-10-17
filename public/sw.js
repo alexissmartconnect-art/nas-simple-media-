@@ -23,6 +23,7 @@ const SHELL = [
   '/css/style.css',
   '/js/app.js',
   '/js/pwa.js',
+  '/js/offline.js',
   '/vendor/hls.js/hls.min.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',

@@ -11,16 +11,29 @@ data class User(
     val username: String,
     val role: String = "user",
     @SerialName("can_share") val canShare: Boolean = false,
+    /** Server 1.6+: the account still uses the factory password and must change it (web UI). */
+    @SerialName("must_change_password") val mustChangePassword: Boolean = false,
 )
 
 @Serializable
-data class LoginResponse(val ok: Boolean = false, val user: User? = null, val error: String? = null)
+data class LoginResponse(
+    val ok: Boolean = false,
+    val user: User? = null,
+    val error: String? = null,
+    val mustChangePassword: Boolean = false,
+    val code: String? = null,
+    val message: String? = null,
+)
 
 @Serializable
 data class MeResponse(val authenticated: Boolean = false, val user: User? = null)
 
 @Serializable
-data class SetupStatus(val defaultAdminUser: String? = null, val defaultAdminActive: Boolean = false)
+data class SetupStatus(
+    val defaultAdminUser: String? = null,
+    val defaultAdminActive: Boolean = false,
+    val passwordMinLength: Int = 10,
+)
 
 @Serializable
 data class Library(
@@ -212,4 +225,8 @@ data class StreamsInfo(
 )
 
 @Serializable
-data class ErrorBody(val error: String? = null)
+data class ErrorBody(val error: String? = null, val code: String? = null)
+
+/** POST /api/public/share/:token/unlock → short-lived signed token (null when no password). */
+@Serializable
+data class ShareUnlock(val ok: Boolean = false, val accessToken: String? = null, val expiresAt: String? = null)
