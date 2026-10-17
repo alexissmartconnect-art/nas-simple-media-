@@ -220,10 +220,11 @@ export function setUserLibraries(userId: number, libraryIds: number[]): void {
 }
 
 /**
- * True while the seeded `admin` account still uses an installation default
- * password (`changeme`, or `ADMIN_PASSWORD`). The login page shows a discreet
- * hint so the very first connection is easy, and it disappears as soon as the
- * password is changed.
+ * True while the seeded `admin` account still uses the factory password
+ * (`changeme`). Only that password is advertised on the login page and forces
+ * a change: a custom `ADMIN_PASSWORD` is an operator choice, so it is neither
+ * displayed nor treated as a default password. The hint disappears as soon as
+ * the factory password is replaced.
  */
 export function isDefaultAdminPasswordActive(): boolean {
   try {
@@ -232,12 +233,7 @@ export function isDefaultAdminPasswordActive(): boolean {
       .prepare(`SELECT * FROM users WHERE username = 'admin' COLLATE NOCASE`)
       .get() as UserRow | undefined;
     if (!u || !u.enabled) return false;
-    const candidates = new Set<string>(['changeme']);
-    if (config.ADMIN_PASSWORD) candidates.add(config.ADMIN_PASSWORD);
-    for (const candidate of candidates) {
-      if (candidate && verifyPassword(candidate, u.password_hash)) return true;
-    }
-    return false;
+    return verifyPassword(DEFAULT_ADMIN_PASSWORD, u.password_hash);
   } catch {
     return false;
   }
