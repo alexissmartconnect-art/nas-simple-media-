@@ -19,6 +19,9 @@
 11. [Variables d'environnement](#variables-denvironnement)
 12. [Développement local](#développement-local)
 13. [Parité Plex & limites](#parité-plex--limites)
+14. [Appli Android (téléphone & Android TV)](#appli-android-téléphone--android-tv)
+
+📘 **Mode opératoire pas-à-pas (admin & invités) : [docs/DOP.md](docs/DOP.md)**
 
 ---
 
@@ -434,6 +437,64 @@ Limites assumées :
 - Le file watch dépend de l’OS ; sinon **Rescan**.
 
 ---
+
+## Appli Android (téléphone & Android TV)
+
+Une **seule appli native** (Kotlin, Jetpack Compose, Media3/ExoPlayer) pour les
+téléphones **et** les téléviseurs Android TV / Google TV — comme le client Plex.
+Code source : [`android/`](android/).
+
+**Ce qu'elle fait**
+
+- Plusieurs serveurs mémorisés (IP locale, `*.ts.net` Tailscale, domaine DSM/Let's Encrypt) ;
+  connexion avec les comptes existants du serveur. La session (et, si vous cochez la case,
+  le mot de passe pour se reconnecter tout seul après un redémarrage du NAS) est stockée
+  **chiffrée** (EncryptedSharedPreferences, clé dans l'Android Keystore).
+- Accueil : **Continuer la lecture**, **Bibliothèques**, **Ajouts récents**.
+- Films en grille d'affiches (tri A→Z / ajouts récents / taille), **séries → saisons → épisodes**,
+  **musique → artistes → albums → titres** (lecture en file d'attente), **recherche**.
+- Fiche média : codecs, pistes audio et sous-titres, **Reprendre à …** / Depuis le début.
+- Lecteur ExoPlayer : qualité **Auto / Original / 1080p / 720p / 480p**, choix de la piste audio
+  et des sous-titres, reprise de lecture synchronisée avec le serveur (toutes les 10 s).
+  *Auto* lit le fichier original quand l'appareil sait le décoder, sinon passe par le remux/transcodage
+  HLS du serveur (DTS, TrueHD, AVI…) ; si la lecture directe échoue, l'appli bascule seule en HLS.
+- **Liens de partage** `https://…/s/<jeton>` : ils s'ouvrent dans l'appli en **invité**
+  (mot de passe du partage demandé si besoin). On peut aussi coller un lien depuis l'écran des serveurs.
+- **Android TV** : icône dans le lanceur TV (bannière), navigation à la **télécommande (D-pad)**,
+  cartes Compose for TV avec mise en avant du focus ; dans le lecteur, bouton **Options** de la barre
+  de contrôle (ou touche Menu) pour la qualité, l'audio et les sous-titres.
+
+**Installer l'APK**
+
+L'APK est produit par GitHub Actions (onglet *Actions* → *Android APK* → dernier run → artefact
+`nas-media-debug-apk`, une fois `android/ci/github-workflow-android.yml` déplacé dans `.github/workflows/`) ou localement (`cd android && ./gradlew assembleDebug` →
+`android/app/build/outputs/apk/debug/app-debug.apk`).
+
+- *Téléphone* : copiez l'APK sur le téléphone, ouvrez-le, autorisez « Installer des applis inconnues »
+  pour votre gestionnaire de fichiers / navigateur, puis Installer.
+- *Android TV / Google TV* :
+  1. Paramètres → Système → À propos → cliquez 7 fois sur *Build Android TV OS* pour activer les options
+     pour les développeurs ; puis Applications → Sécurité → autorisez les sources inconnues pour **Downloader**.
+  2. Installez l'appli **Downloader** (AFTVnews) depuis le Play Store, saisissez l'URL de l'APK
+     (par ex. un lien direct sur votre NAS ou un raccourci), téléchargez puis installez.
+  3. Ou via **adb** depuis un PC du réseau : activez *Débogage réseau* sur la TV puis
+     `adb connect 192.168.1.50:5555 && adb install -r nas-media-debug.apk`.
+
+**HTTPS / http en clair**
+
+- Sur le réseau local, `http://192.168.x.x:8096` fonctionne : l'appli autorise le HTTP en clair
+  (`network_security_config.xml`) parce qu'Android ne sait pas limiter cela à des plages d'IP locales.
+  En saisie, une IP/un nom local sans `http(s)://` devient `http://…:8096`, un nom public devient `https://…`.
+- Depuis l'extérieur, utilisez **HTTPS** : Tailscale (`tailscale serve` → `https://nas.xxx.ts.net`)
+  ou le proxy inverse DSM avec Let's Encrypt. L'appli affiche un avertissement si vous saisissez une
+  adresse publique en `http://` (le mot de passe circulerait en clair).
+- Avec Tailscale classique, installez aussi l'appli **Tailscale** sur le téléphone / la TV.
+
+**Limites actuelles** : pas encore d'affiches/métadonnées en ligne (vignettes extraites des vidéos),
+pas de Chromecast ni de téléchargement hors-ligne, pas d'écran d'administration dans l'appli ;
+en HLS transcodé, avancer au-delà de la partie déjà transcodée attend que le serveur la produise
+(le transcodage repart du début). La session est en mémoire sur le serveur : après un redémarrage
+du NAS, l'appli se reconnecte seule si le mot de passe a été mémorisé, sinon elle redemande la connexion.
 
 ## Licence
 

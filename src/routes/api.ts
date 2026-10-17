@@ -544,7 +544,10 @@ apiRouter.get('/series', requireAuth, (req, res) => {
   const ph = ids.map(() => '?').join(',');
   const rows = getDb()
     .prepare(
-      `SELECT show_name as name, COUNT(*) as episodes, COUNT(DISTINCT season) as seasons, library_id
+      `SELECT show_name as name, COUNT(*) as episodes, COUNT(DISTINCT season) as seasons, library_id,
+              (SELECT p.id FROM media_items p
+                WHERE p.library_id = media_items.library_id AND p.show_name = media_items.show_name
+                ORDER BY COALESCE(p.season, 9999), COALESCE(p.episode, 9999), p.id LIMIT 1) as poster_media_id
        FROM media_items WHERE kind = 'series' AND show_name IS NOT NULL AND library_id IN (${ph})
        GROUP BY library_id, show_name ORDER BY show_name`
     )

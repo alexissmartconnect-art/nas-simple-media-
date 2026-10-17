@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NAS Media</string>
+
+    <!-- Serveurs -->
+    <string name="servers_title">Mes serveurs</string>
+    <string name="servers_empty">Aucun serveur enregistré. Ajoutez votre NAS pour commencer.</string>
+    <string name="server_add">Ajouter un serveur</string>
+    <string name="server_url">Adresse du serveur</string>
+    <string name="server_url_hint">192.168.1.20:8096, nas.xxx.ts.net ou https://media.mondomaine.fr</string>
+    <string name="server_name">Nom (facultatif)</string>
+    <string name="server_check">Vérifier et continuer</string>
+    <string name="server_remove">Retirer</string>
+    <string name="server_connected_as">Connecté : %1$s</string>
+    <string name="server_not_connected">Non connecté</string>
+    <string name="server_insecure_warning">Attention : adresse publique en http:// — votre mot de passe circulera en clair. Préférez https:// (Tailscale, proxy DSM).</string>
+    <string name="server_invalid">Adresse invalide</string>
+    <string name="open_share_link">Ouvrir un lien de partage</string>
+    <string name="share_link_hint">https://…/s/jeton</string>
+    <string name="share_link_invalid">Lien de partage invalide</string>
+
+    <!-- Connexion -->
+    <string name="login_title">Connexion</string>
+    <string name="login_username">Utilisateur</string>
+    <string name="login_password">Mot de passe</string>
+    <string name="login_remember">Se souvenir du mot de passe (chiffré sur l’appareil)</string>
+    <string name="login_submit">Se connecter</string>
+    <string name="login_default_admin">Le compte admin utilise encore le mot de passe par défaut : changez-le depuis l’interface web avant d’ouvrir le serveur sur Internet.</string>
+    <string name="logout">Se déconnecter</string>
+    <string name="change_server">Changer de serveur</string>
+
+    <!-- Accueil -->
+    <string name="home_continue">Continuer la lecture</string>
+    <string name="home_recent">Ajouts récents</string>
+    <string name="home_libraries">Bibliothèques</string>
+    <string name="home_empty">Aucune bibliothèque accessible avec ce compte.</string>
+    <string name="search">Rechercher</string>
+    <string name="search_hint">Film, série, artiste, album…</string>
+    <string name="search_empty">Aucun résultat</string>
+    <string name="items_count">%1$d éléments</string>
+    <string name="lib_movies">Films</string>
+    <string name="lib_series">Séries</string>
+    <string name="lib_music">Musique</string>
+    <string name="seasons_count">%1$d saison(s) · %2$d épisode(s)</string>
+    <string name="albums_count">%1$d album(s) · %2$d titre(s)</string>
+    <string name="season_n">Saison %1$d</string>
+    <string name="season_unknown">Autres</string>
+    <string name="album_unknown">Sans album</string>
+    <string name="play_all">Tout lire</string>
+
+    <!-- Détail -->
+    <string name="play">Lire</string>
+    <string name="resume_at">Reprendre à %1$s</string>
+    <string name="play_from_start">Depuis le début</string>
+    <string name="quality">Qualité</string>
+    <string name="audio">Audio</string>
+    <string name="subtitles">Sous-titres</string>
+    <string name="subtitles_off">Désactivés</string>
+    <string name="watched">Vu</string>
+    <string name="size">Taille : %1$s</string>
+    <string name="transcode_off">Transcodage désactivé sur le serveur : lecture directe uniquement.</string>
+
+    <!-- Lecteur -->
+    <string name="player_options">Options</string>
+    <string name="player_loading">Préparation de la lecture…</string>
+    <string name="player_transcoding">Le serveur prépare le flux…</string>
+    <string name="player_fallback">Lecture directe impossible : passage en mode Compatible (HLS).</string>
+    <string name="player_error">Erreur de lecture : %1$s</string>
+    <string name="player_mode_direct">Direct</string>
+    <string name="player_mode_hls">Compatible (HLS)</string>
+
+    <!-- Partage -->
+    <string name="share_title">Partage</string>
+    <string name="share_password_needed">Ce partage est protégé par un mot de passe.</string>
+    <string name="share_open">Ouvrir</string>
+    <string name="share_guest">Accès invité — aucun compte nécessaire</string>
+
+    <!-- Commun -->
+    <string name="retry">Réessayer</string>
+    <string name="back">Retour</string>
+    <string name="cancel">Annuler</string>
+    <string name="loading">Chargement…</string>
+    <string name="error_generic">Erreur : %1$s</string>
+    <string name="session_expired">Session expirée, reconnectez-vous.</string>
+</resources>
