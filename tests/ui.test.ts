@@ -36,8 +36,8 @@ async function bootUi(options: UiOptions = {}) {
   const mediaCount = options.mediaCount ?? 5;
   const html = fs
     .readFileSync(path.join(REPO_ROOT, 'public', 'index.html'), 'utf8')
-    // no CDN hls.js in tests (offline): the video player is not exercised here
-    .replace(/<script src="https:\/\/cdn\.jsdelivr\.net[^>]*><\/script>/, '');
+    // hls.js (vendored) is not loaded in tests: the video player is not exercised here
+    .replace(/<script src="\/vendor\/hls\.js\/[^"]*"><\/script>/, '');
 
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://nas.local:8096/' });
   const win: any = dom.window;
