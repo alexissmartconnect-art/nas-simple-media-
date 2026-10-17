@@ -12,3 +12,9 @@ coverage/
 dist-spk/
 synology/package/
 .spk-deps-*/
+
+# Signing material — never commit (use existing GitHub Actions secrets only)
+*.jks
+*.keystore
+*.p12
+signing.properties

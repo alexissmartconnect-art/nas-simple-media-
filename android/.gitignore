@@ -6,3 +6,10 @@ local.properties
 *.iml
 captures/
 .kotlin/
+*.jks
+*.keystore
+*.p12
+signing.properties
+*.apk
+__pycache__/
+*.pyc

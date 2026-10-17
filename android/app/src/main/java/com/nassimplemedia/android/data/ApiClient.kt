@@ -29,6 +29,18 @@ class PasswordChangeRequiredException(message: String) : IOException(message)
 
 const val PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
 
+/**
+ * Identifies this client on every request (API, posters, ExoPlayer).
+ * The published 0.2.0 APK still sends `NASMedia-Android/0.1`; 0.2.1 corrects that.
+ * Keep in sync with `versionName` in app/build.gradle.kts.
+ */
+const val USER_AGENT = "NASMedia-Android/0.2.1"
+
+/** Used by [Session.http] and by unit tests. */
+fun userAgentInterceptor(): Interceptor = Interceptor { chain ->
+    chain.proceed(chain.request().newBuilder().header("User-Agent", USER_AGENT).build())
+}
+
 fun passwordChangeMessage(base: String): String =
     "Ce compte utilise encore le mot de passe par défaut. Pour votre sécurité, changez-le d’abord " +
         "dans l’interface web (${base.trimEnd('/')}/login.html), puis reconnectez-vous ici avec le nouveau mot de passe."
@@ -64,9 +76,7 @@ object Session {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .addInterceptor(interceptor)
-            .addInterceptor { chain ->
-                chain.proceed(chain.request().newBuilder().header("User-Agent", "NASMedia-Android/0.2.0").build())
-            }
+            .addInterceptor(userAgentInterceptor())
             .build()
     }
 

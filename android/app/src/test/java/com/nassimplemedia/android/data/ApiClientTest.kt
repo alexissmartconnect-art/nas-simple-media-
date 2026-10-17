@@ -78,6 +78,24 @@ class ApiClientTest {
         assertEquals(3, server.requestCount)
     }
 
+    @Test fun userAgentIsNasMedia021() = runTest {
+        assertEquals("NASMedia-Android/0.2.1", USER_AGENT)
+        assertTrue(USER_AGENT != "NASMedia-Android/0.1")
+        assertTrue(USER_AGENT != "NASMedia-Android/0.2.0")
+        server.enqueue(MockResponse().setBody("""{"libraries":[]}"""))
+        val isolated = OkHttpClient.Builder().addInterceptor(userAgentInterceptor()).build()
+        ApiClient(isolated).libraries()
+        assertEquals("NASMedia-Android/0.2.1", server.takeRequest().getHeader("User-Agent"))
+    }
+
+    @Test fun sessionClientSendsCorrectedUserAgent() = runTest {
+        server.enqueue(MockResponse().setBody("""{"libraries":[]}"""))
+        ApiClient(Session.http).libraries()
+        val sent = server.takeRequest().getHeader("User-Agent")
+        assertEquals("NASMedia-Android/0.2.1", sent)
+        assertTrue(sent != "NASMedia-Android/0.1")
+    }
+
     @Test fun cookieHeaderParsing() {
         assertEquals("v", ApiClient.parseCookie("a=1; nas_sm_session=v; Path=/", "nas_sm_session"))
         assertEquals(null, ApiClient.parseCookie("nas_sm_session=; Path=/", "nas_sm_session"))

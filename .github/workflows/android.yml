@@ -1,0 +1,194 @@
+name: Android
+
+# Tests and builds the phone + Android TV app.
+# Does not publish a GitHub Release and does not touch server tags (v*).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+      - '.github/workflows/release-android.yml'
+      - 'README.md'
+      - 'docs/DOP.md'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+      - '.github/workflows/release-android.yml'
+      - 'README.md'
+      - 'docs/DOP.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Tests et APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Vérifier version, User-Agent et docs
+        run: python3 android/ci/android_release.py check-sources
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        run: bash android/ci/install-sdk.sh
+
+      - name: Cache Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Télécharger l'APK 0.2.0 publié
+        run: python3 android/ci/android_release.py download-reference --dest "${{ runner.temp }}/ref-apk"
+
+      - name: Lire la signature de l'APK 0.2.0
+        run: python3 android/ci/android_release.py apk-info --apk "${{ runner.temp }}/ref-apk/nas-simple-media-0.2.0-debug.apk" --output "${{ runner.temp }}/reference.json"
+
+      - name: Clé de signature déjà configurée
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+          NAS_MEDIA_KEYSTORE_BASE64: ${{ secrets.NAS_MEDIA_KEYSTORE_BASE64 }}
+          ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          DEBUG_STORE_PASSWORD: ${{ secrets.DEBUG_STORE_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+        run: |
+          set -euo pipefail
+          sha=$(python3 -c 'import json; print(json.load(open("${{ runner.temp }}/reference.json"))["sha256"])')
+          python3 android/ci/android_release.py prepare-signing \
+            --reference-sha256 "$sha" \
+            --dest "${{ runner.temp }}/signing" \
+            --output "${{ runner.temp }}/keystore.json"
+
+      - name: Tests et construction
+        working-directory: android
+        run: bash ci/gradle-ci.sh testDebugUnitTest assembleDebug assembleRelease
+
+      - name: Vérifier l'User-Agent dans les APK
+        run: |
+          set -euo pipefail
+          python3 android/ci/android_release.py verify-user-agent --apk android/app/build/outputs/apk/debug/app-debug.apk
+          shopt -s nullglob
+          rels=(android/app/build/outputs/apk/release/app-release*.apk)
+          if [ ${#rels[@]} -eq 0 ]; then
+            echo "APK release introuvable"
+            exit 1
+          fi
+          python3 android/ci/android_release.py verify-user-agent --apk "${rels[0]}"
+
+      - name: Comparer à l'APK 0.2.0
+        run: |
+          python3 android/ci/android_release.py collect \
+            --reference "${{ runner.temp }}/reference.json" \
+            --keystore "${{ runner.temp }}/keystore.json" \
+            --apk-root android/app/build/outputs/apk \
+            --output "${{ runner.temp }}/report.json" \
+            --tag android-v0.2.1 \
+            --repo "${{ github.repository }}"
+
+      - name: Préparer les artefacts CI
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ runner.temp }}/ci-apks"
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+            "${{ runner.temp }}/ci-apks/nas-simple-media-0.2.1-debug-CI.apk"
+          shopt -s nullglob
+          rels=(android/app/build/outputs/apk/release/app-release*.apk)
+          rel=${rels[0]}
+          case "$rel" in
+            *unsigned*) name="nas-simple-media-0.2.1-release-UNSIGNED-NOT-AN-UPDATE.apk" ;;
+            *) name="nas-simple-media-0.2.1-release-CI.apk" ;;
+          esac
+          cp "$rel" "${{ runner.temp }}/ci-apks/$name"
+          ls -la "${{ runner.temp }}/ci-apks"
+
+      - name: Résumé signature
+        if: always()
+        run: |
+          python3 - << 'PY'
+          import json, os
+          from pathlib import Path
+          def load(name):
+              path = Path(os.environ["RUNNER_TEMP"]) / name
+              return json.loads(path.read_text()) if path.is_file() else {}
+          ref = load("reference.json")
+          ks = load("keystore.json")
+          report = load("report.json")
+          lines = [
+              "### Signature de l'APK 0.2.0 publié",
+              "",
+              f"- package: `{ref.get('package', '?')}`",
+              f"- versionCode: `{ref.get('versionCode', '?')}` — versionName: `{ref.get('versionName', '?')}`",
+              f"- certificat SHA-256: `{ref.get('sha256', '?')}`",
+              f"- sujet: `{ref.get('subject', '?')}`",
+              f"- clé déjà configurée: `{ks.get('status', '?')}`",
+              f"- mise à jour officielle possible: `{report.get('official', '?')}`",
+              f"- raison: {report.get('reason', 'rapport absent')}",
+              "",
+              "Les APK de ce job sont des artefacts CI, pas la release Android.",
+          ]
+          text = "\n".join(lines) + "\n"
+          print(text)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(text)
+          PY
+
+      - name: Envoyer les APK CI
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nas-media-0.2.1-ci-apks
+          path: ${{ runner.temp }}/ci-apks/
+          if-no-files-found: error
+
+      - name: Rapports de tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: android/app/build/reports/tests/
+          if-no-files-found: ignore
