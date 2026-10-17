@@ -1,0 +1,157 @@
+name: Release Android
+
+# Publishes the phone + Android TV app on tags android-v* only.
+# Example: android-v0.2.1
+#
+# Do not use a v* tag. release-spk.yml builds the Synology package on v*
+# and must not run for this app, and must not modify the server release.
+
+on:
+  push:
+    tags:
+      - 'android-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag android-v* existant à (re)publier'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-android-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Construire et publier
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: ${{ github.event_name == 'push' || startsWith(github.event.inputs.tag || '', 'android-v') }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ANDROID_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Vérifier que le tag n'est pas une release serveur
+        run: |
+          set -euo pipefail
+          tag="$ANDROID_RELEASE_TAG"
+          echo "tag=$tag"
+          case "$tag" in
+            android-v*) ;;
+            *) echo "::error::tag refusé ($tag). Utiliser android-v*, jamais v*." ; exit 1 ;;
+          esac
+          case "$tag" in
+            v[0-9]*) echo "::error::tag serveur refusé" ; exit 1 ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.sha }}
+
+      - name: Vérifier version, User-Agent et docs
+        run: python3 android/ci/android_release.py check-sources
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Installer les composants SDK
+        run: bash android/ci/install-sdk.sh
+
+      - name: Cache Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Télécharger l'APK 0.2.0 publié
+        run: python3 android/ci/android_release.py download-reference --dest "${{ runner.temp }}/ref-apk"
+
+      - name: Lire la signature de l'APK 0.2.0
+        run: python3 android/ci/android_release.py apk-info --apk "${{ runner.temp }}/ref-apk/nas-simple-media-0.2.0-debug.apk" --output "${{ runner.temp }}/reference.json"
+
+      - name: Clé de signature déjà configurée
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+          NAS_MEDIA_KEYSTORE_BASE64: ${{ secrets.NAS_MEDIA_KEYSTORE_BASE64 }}
+          ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          DEBUG_STORE_PASSWORD: ${{ secrets.DEBUG_STORE_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+        run: |
+          set -euo pipefail
+          sha=$(python3 -c 'import json; print(json.load(open("${{ runner.temp }}/reference.json"))["sha256"])')
+          python3 android/ci/android_release.py prepare-signing \
+            --reference-sha256 "$sha" \
+            --dest "${{ runner.temp }}/signing" \
+            --output "${{ runner.temp }}/keystore.json"
+
+      - name: Tests et construction
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease
+
+      - name: Vérifier l'User-Agent dans les APK
+        run: |
+          set -euo pipefail
+          python3 android/ci/android_release.py verify-user-agent --apk android/app/build/outputs/apk/debug/app-debug.apk
+          shopt -s nullglob
+          rels=(android/app/build/outputs/apk/release/app-release*.apk)
+          if [ ${#rels[@]} -eq 0 ]; then
+            echo "APK release introuvable"
+            exit 1
+          fi
+          python3 android/ci/android_release.py verify-user-agent --apk "${rels[0]}"
+
+      - name: Décider mise à jour ou artefact de test
+        run: |
+          python3 android/ci/android_release.py collect \
+            --reference "${{ runner.temp }}/reference.json" \
+            --keystore "${{ runner.temp }}/keystore.json" \
+            --apk-root android/app/build/outputs/apk \
+            --output "${{ runner.temp }}/report.json" \
+            --tag "$ANDROID_RELEASE_TAG" \
+            --repo "${{ github.repository }}"
+
+      - name: Publier la release Android
+        id: publish
+        run: |
+          python3 android/ci/android_release.py publish \
+            --report "${{ runner.temp }}/report.json" \
+            --stage "${{ runner.temp }}/release-stage"
+
+      - name: Signaler le blocage de signature
+        if: steps.publish.outcome == 'success' && steps.publish.outputs.official != 'true'
+        run: |
+          echo "::error::Mise à jour officielle bloquée : la clé de l'APK 0.2.0 n'est pas disponible dans les secrets déjà configurés. La release ${ANDROID_RELEASE_TAG} contient au plus un artefact de test, qui n'est pas une mise à jour installable. La release serveur v1.6.1 n'a pas été modifiée."
+          exit 1

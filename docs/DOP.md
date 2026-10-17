@@ -10,7 +10,7 @@
 | 🟢 | Disponible aujourd’hui sur `main` |
 | 🟢 *(PR #9)* | Appli Android — PR [#9](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/9) **fusionnée**, disponible |
 | 🟢 *(PR #8)* | Appli web installable (PWA) — PR [#8](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/8) **fusionnée**, disponible |
-| 🟢 *(phase 0)* | Durcissement sécurité (version 1.6.0 / appli 0.2.0) — PR [#10](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/10) **fusionnée**, disponible ([release v1.6.0](https://github.com/alexissmartconnect-art/nas-simple-media-/releases/tag/v1.6.0)) |
+| 🟢 *(phase 0)* | Durcissement sécurité (serveur 1.6.0 ; partages protégés : appli Android **0.2.0 ou ultérieure**) — PR [#10](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/10) **fusionnée**, disponible ([release v1.6.0](https://github.com/alexissmartconnect-art/nas-simple-media-/releases/tag/v1.6.0)) |
 | ⚠️ | Point de sécurité à lire avant d’agir |
 
 Les intitulés des menus **Synology DSM**, **Freebox OS**, **Tailscale** et **Android** peuvent légèrement varier selon la version ou le fabricant.
@@ -265,7 +265,7 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
 
 ## 5. Invité — téléphone Android
 
-> 🟢 L’appli native **NAS Media** est disponible : l’administrateur transmet l’APK (`nas-media-debug.apk`, produit par `cd android && ./gradlew assembleDebug`). Le navigateur fonctionne aussi : `https://<adresse>` → page de connexion.
+> 🟢 L’appli native **NAS Media** est disponible (téléphone et Android TV). Les partages protégés exigent la version **0.2.0 ou ultérieure**. L’administrateur transmet l’APK de la release Android [`android-v0.2.1`](https://github.com/alexissmartconnect-art/nas-simple-media-/releases/tag/android-v0.2.1) — une mise à jour par-dessus l’APK 0.2.0 seulement si les notes indiquent la même signature ; sinon c’est un artefact de test. Le navigateur fonctionne aussi : `https://<adresse>` → page de connexion.
 
 **5.1 (Voie A seulement) Installer Tailscale**
 
@@ -274,7 +274,7 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
 
 **5.2 Installer l’APK**
 
-1. Récupérez le fichier `nas-media-debug.apk` envoyé par l’administrateur.
+1. Récupérez l’APK indiqué dans les notes de la release Android `android-v0.2.1` (pas le paquet `.spk` du serveur). Si les notes parlent d’un artefact de test, ce n’est pas une mise à jour de l’appli déjà installée.
 2. Ouvrez-le depuis **Fichiers** ou **Téléchargements**.
 3. Android demande d’autoriser l’installation d’**applications inconnues** pour l’appli qui ouvre le fichier : autorisez-la, revenez en arrière, puis **Installer**.
 4. L’appli s’appelle **NAS Media**.
@@ -303,7 +303,7 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
 
 **5.5 Ouvrir un lien de partage**
 
-Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aussi le coller dans **Mes serveurs → Ouvrir un lien de partage → Ouvrir**. Le mot de passe du partage est demandé si nécessaire (🟢 *(phase 0)* envoyé une seule fois au serveur, il n’apparaît plus dans les adresses de lecture ; il faut l’appli **0.2.0**).
+Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aussi le coller dans **Mes serveurs → Ouvrir un lien de partage → Ouvrir**. Le mot de passe du partage est demandé si nécessaire (🟢 *(phase 0)* envoyé une seule fois au serveur, il n’apparaît plus dans les adresses de lecture ; il faut l’appli **0.2.0 ou ultérieure**).
 
 ---
 
@@ -325,7 +325,7 @@ Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aus
 
 - **Avec l’appli Downloader** :
   1. Play Store → **Downloader** (de AFTVnews) → **Installer**.
-  2. Dans Downloader, saisissez l’URL directe de l’APK. L’administrateur peut la fournir, par exemple avec un lien de partage **File Station** du NAS pointant vers `nas-media-debug.apk`.
+  2. Dans Downloader, saisissez l’URL directe de l’APK. L’administrateur la trouve dans la release Android `android-v0.2.1` (lire les notes : mise à jour signée comme la 0.2.0, ou artefact de test).
   3. Téléchargez, puis **Installer**.
 - **Avec adb**, depuis un ordinateur du même réseau :
   1. Sur la télé, activez **Débogage USB / réseau** dans les options pour les développeurs.
@@ -333,7 +333,8 @@ Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aus
 
      ```bash
      adb connect 192.168.1.60:5555      # IP de la télé
-     adb install -r nas-media-debug.apk
+     adb install -r nas-simple-media-android.apk
+     # -r ne remplace l’appli 0.2.0 que si la signature est la même (voir les notes de release)
      ```
 
 L’appli **NAS Media** apparaît dans le lanceur TV avec sa bannière orange.
@@ -377,3 +378,4 @@ L’appli **NAS Media** apparaît dans le lanceur TV avec sa bannière orange.
 | Le lien `/s/` contient `192.168…` | L’adresse externe n’est pas déclarée | **Administration → 🌐 Accès externe** → enregistrez l’adresse HTTPS (§3). |
 | « Trop de tentatives. Réessayez dans … s » | Protection contre les essais de mot de passe | Attendez le délai indiqué, puis vérifiez l’identifiant et le mot de passe. |
 | APK refusé à l’installation | Sources inconnues non autorisées | §5.2 (téléphone) ou §6.2 (télé). |
+| « Application non installée » en mettant à jour la 0.2.0 | Signature différente de l’APK déjà installé (artefact de test, pas une mise à jour) | Lisez les notes de `android-v0.2.1`. Sans la même clé, Android refuse le remplacement. Désinstaller efface les serveurs mémorisés sur l’appareil. |

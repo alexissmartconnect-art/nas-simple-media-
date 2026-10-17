@@ -5,6 +5,21 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Optional CI signing. The keystore and passwords come only from the environment
+// (GitHub Actions secrets already configured). Nothing secret is stored in the repo.
+// Absent env → debug keeps the local debug key, release stays unsigned.
+val ciKeystore = System.getenv("ANDROID_KEYSTORE_FILE")
+    ?.takeIf { it.isNotBlank() }
+    ?.let { java.io.File(it) }
+    ?.takeIf { it.isFile }
+val ciStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val ciKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val ciKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotBlank() } ?: ciStorePassword
+val useCiSigning = ciKeystore != null &&
+    !ciStorePassword.isNullOrBlank() &&
+    !ciKeyAlias.isNullOrBlank() &&
+    !ciKeyPassword.isNullOrBlank()
+
 android {
     namespace = "com.nassimplemedia.android"
     compileSdk = 35
@@ -13,19 +28,37 @@ android {
         applicationId = "com.nassimplemedia.android"
         minSdk = 23
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        // Keep versionName in sync with ApiClient.USER_AGENT (NASMedia-Android/<versionName>).
+        versionCode = 3
+        versionName = "0.2.1"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    if (useCiSigning) {
+        signingConfigs {
+            create("ci") {
+                storeFile = ciKeystore
+                storePassword = ciStorePassword
+                keyAlias = ciKeyAlias
+                keyPassword = ciKeyPassword
+            }
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            if (useCiSigning) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (useCiSigning) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
     }
     compileOptions {

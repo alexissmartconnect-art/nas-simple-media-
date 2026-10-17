@@ -407,7 +407,7 @@ Ce qui est en place (1.6.0) :
 - Liens de partage protégés : les liens `/s/<jeton>` ne changent pas. Les anciens liens VLC / `.m3u`
   contenant `?password=` fonctionnent encore pendant la transition (`SHARE_PASSWORD_QUERY_COMPAT=1`) ; les
   nouveaux contiennent `?access=…` et expirent au bout de 12 h (régénérez la playlist ensuite).
-- L’appli Android 0.2.0 est nécessaire pour ouvrir les partages protégés via le nouveau flux (les versions
+- L’appli Android **0.2.0 ou ultérieure** est nécessaire pour ouvrir les partages protégés via le nouveau flux (les versions
   précédentes passent encore par `?password=` tant que la compatibilité est active).
 
 Reste à faire (hors phase 0) : HTTPS natif sans proxy, 2FA, journal d’audit des connexions, liste/révocation
@@ -509,6 +509,10 @@ Une **seule appli native** (Kotlin, Jetpack Compose, Media3/ExoPlayer) pour les
 téléphones **et** les téléviseurs Android TV / Google TV — comme le client Plex.
 Code source : [`android/`](android/).
 
+**Version 0.2.1** (`versionCode` 3) — User-Agent `NASMedia-Android/0.2.1`.
+Les partages protégés exigent l’appli **0.2.0 ou ultérieure**. L’APK 0.2.0 déjà publié
+avec le serveur 1.6.0 envoie encore `NASMedia-Android/0.1` ; la 0.2.1 corrige cet en-tête.
+
 **Ce qu'elle fait**
 
 - Plusieurs serveurs mémorisés (IP locale, `*.ts.net` Tailscale, domaine DSM/Let's Encrypt) ;
@@ -532,9 +536,18 @@ Code source : [`android/`](android/).
 
 **Installer l'APK**
 
-L'APK est produit par GitHub Actions (onglet *Actions* → *Android APK* → dernier run → artefact
-`nas-media-debug-apk`, une fois `android/ci/github-workflow-android.yml` déplacé dans `.github/workflows/`) ou localement (`cd android && ./gradlew assembleDebug` →
-`android/app/build/outputs/apk/debug/app-debug.apk`).
+La release Android est **distincte** des tags serveur `v*` (ceux-ci déclenchent uniquement
+le paquet SPK). Elle est publiée sur le tag `android-v0.2.1` :
+<https://github.com/alexissmartconnect-art/nas-simple-media-/releases/tag/android-v0.2.1>
+
+Une mise à jour installable par-dessus l’APK 0.2.0 exige **la même clé de signature**
+(et le même identifiant d’application). Si les notes de cette release indiquent que la clé
+d’origine n’est pas disponible, le fichier joint est un **artefact de test**, pas une mise
+à jour officielle : Android refusera de l’installer par-dessus l’appli déjà présente.
+
+Les tests et la construction (JDK 17 + Android SDK) tournent dans GitHub Actions
+(onglet *Actions* → *Android*). En local : `cd android && ./gradlew testDebugUnitTest assembleDebug assembleRelease`
+(APK debug : `android/app/build/outputs/apk/debug/app-debug.apk`).
 
 - *Téléphone* : copiez l'APK sur le téléphone, ouvrez-le, autorisez « Installer des applis inconnues »
   pour votre gestionnaire de fichiers / navigateur, puis Installer.
@@ -544,7 +557,8 @@ L'APK est produit par GitHub Actions (onglet *Actions* → *Android APK* → der
   2. Installez l'appli **Downloader** (AFTVnews) depuis le Play Store, saisissez l'URL de l'APK
      (par ex. un lien direct sur votre NAS ou un raccourci), téléchargez puis installez.
   3. Ou via **adb** depuis un PC du réseau : activez *Débogage réseau* sur la TV puis
-     `adb connect 192.168.1.50:5555 && adb install -r nas-media-debug.apk`.
+     `adb connect 192.168.1.50:5555 && adb install -r nas-simple-media-android.apk`
+     (`-r` ne remplace l’appli déjà installée que si la signature est identique).
 
 **HTTPS / http en clair**
 
