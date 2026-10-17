@@ -10,6 +10,7 @@
 | 🟢 | Disponible aujourd’hui sur `main` |
 | 🟢 *(PR #9)* | Appli Android — PR [#9](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/9) **fusionnée**, disponible |
 | 🟢 *(PR #8)* | Appli web installable (PWA) — PR [#8](https://github.com/alexissmartconnect-art/nas-simple-media-/pull/8) **fusionnée**, disponible |
+| 🟡 *(phase 0)* | Durcissement sécurité (version 1.6.0 / appli 0.2.0) — branche `feat/security-hardening`, PR **en attente de fusion** : pas encore sur `main` |
 | ⚠️ | Point de sécurité à lire avant d’agir |
 
 Les intitulés des menus **Synology DSM**, **Freebox OS**, **Tailscale** et **Android** peuvent légèrement varier selon la version ou le fabricant.
@@ -85,6 +86,17 @@ sudo /var/packages/nas-simple-media/scripts/start-stop-status restart
    ```
 
 3. Adaptez les chemins de vos médias dans `docker-compose.yml`.
+   🟡 *(phase 0)* L’image tourne en utilisateur **non-root** (`node`, uid 1000). Donnez-lui le dossier data **une fois**, en SSH :
+
+   ```bash
+   sudo mkdir -p /volume1/docker/nas-simple-media/data
+   sudo chown -R 1000:1000 /volume1/docker/nas-simple-media/data
+   ```
+
+   Sans cela, le conteneur s’arrête avec le message « DATA_PATH … n'est pas accessible en écriture ».
+   Si vous n’utilisez l’appli **que** via le proxy inversé DSM ou `tailscale serve`, remplacez dans le compose
+   `- "8096:8096"` par `- "127.0.0.1:8096:8096"` : le port 8096 n’est alors plus joignable depuis le réseau
+   (ni depuis le LAN). Laissez la ligne d’origine si vous voulez `http://IP-DU-NAS:8096` à la maison.
 4. Lancez le conteneur en SSH :
 
    ```bash
@@ -95,15 +107,20 @@ sudo /var/packages/nas-simple-media/scripts/start-stop-status restart
 5. Ouvrez `http://IP-DU-NAS:8096`.
 
 **Mise à jour (Docker)** : récupérez la nouvelle version du projet dans le même dossier, puis relancez `sudo docker compose up -d --build`.
+🟡 *(phase 0)* En passant à 1.6.0, faites d’abord le `chown -R 1000:1000` ci-dessus : l’ancien conteneur écrivait en root.
 
 ### 2.2 Changer le mot de passe `admin` (avant toute autre chose) ⚠️
 
-Tant que le mot de passe par défaut est actif, la page de connexion affiche un rappel : *« … mot de passe **changeme** — pensez à le changer une fois connecté (🔑 Mot de passe) »*.
+🟡 *(phase 0)* **Le changement est obligatoire** tant que le compte utilise `changeme` :
 
-1. Connectez-vous avec l’identifiant `admin` et le mot de passe `changeme`, ou la valeur de `ADMIN_PASSWORD` si vous l’avez changée.
-2. En haut de l’écran, cliquez sur **🔑 Mot de passe**. La fenêtre « Changer mon mot de passe » s’ouvre.
-3. Remplissez **Mot de passe actuel** et **Nouveau mot de passe**. Le formulaire accepte 4 caractères minimum, mais utilisez au moins 12 caractères.
-4. Validez, puis vérifiez que le rappel a disparu de la page de connexion. L’appli Android affiche le même avertissement tant que le mot de passe par défaut est actif.
+1. Depuis un navigateur **du réseau local** (le rappel « Première connexion : identifiant **admin**, mot de passe **changeme** » ne s’affiche qu’en local), connectez-vous avec `admin` / `changeme` — ou la valeur de `ADMIN_PASSWORD` si vous l’avez définie.
+2. Si le mot de passe est `changeme`, l’écran **« Nouveau mot de passe obligatoire »** apparaît aussitôt : saisissez deux fois un mot de passe d’**au moins 10 caractères** (les variantes de « changeme » sont refusées), puis **Enregistrer et continuer**. Tant que ce n’est pas fait, le serveur refuse tout le reste.
+3. Les autres appareils connectés avec l’ancien mot de passe sont déconnectés.
+4. Plus tard, pour changer à nouveau : en haut de l’écran, **🔑 Mot de passe** → **Mot de passe actuel** + **Nouveau mot de passe (min. 10 caractères)**.
+
+L’appli Android ne propose pas ce formulaire : avec `changeme`, elle affiche « Ce compte utilise encore le mot de passe par défaut… changez-le d’abord dans l’interface web (…/login.html) », puis on se reconnecte dans l’appli avec le nouveau mot de passe.
+
+> Avant la phase 0 (version ≤ 1.5.1) : pas de blocage, seulement un rappel sur la page de connexion, et 4 caractères minimum. Changez-le quand même via **🔑 Mot de passe**.
 
 ### 2.3 Créer les bibliothèques
 
@@ -122,14 +139,20 @@ Au premier démarrage, trois bibliothèques existent déjà : `Films` → `Movie
 
 ## 3. Admin — accès depuis l’extérieur
 
-> ⚠️ **Phase « sécurité » (phase 0) pas encore réalisée.** Avant d’exposer le serveur **publiquement sur Internet** (voie B, ou Tailscale Funnel), sachez que plusieurs durcissements ne sont pas encore faits dans le code :
+> ⚠️ **Sécurité avant d’exposer le serveur publiquement** (voie B, ou Tailscale Funnel).
 >
-> - le cookie de session n’a pas l’attribut `secure` ;
-> - il n’y a ni en-têtes HSTS ni CSP ;
-> - le mot de passe d’un lien de partage passe dans l’URL ;
-> - les sessions sont gardées en mémoire et sont donc perdues à chaque redémarrage.
+> 🟡 *(phase 0)* Ce qui est fait dans la version 1.6.0 :
 >
-> **Recommandation :** utilisez la **voie A (Tailscale privé)**, qui n’ouvre rien sur Internet, tant que cette phase n’est pas fusionnée. Si vous choisissez quand même la voie B, appliquez au minimum le §2.2 et donnez à chaque invité un compte `user` limité à ses bibliothèques (§4).
+> - cookie de session `HttpOnly` + `SameSite=Lax`, et `Secure` dès que l’accès se fait en HTTPS ;
+> - en-têtes CSP stricte, anti-iframe, et HSTS (uniquement en HTTPS) ;
+> - le mot de passe d’un lien de partage **ne passe plus dans l’URL** (jeton temporaire signé) ;
+> - sessions **en base** (plus perdues au redémarrage), déconnexion réelle ;
+> - changement obligatoire de `changeme`, 10 caractères minimum, limites de débit et verrouillage temporaire d’un compte après 10 échecs depuis Internet ;
+> - seuls les proxys locaux (DSM, `tailscale serve`) peuvent annoncer l’IP du client (`TRUST_PROXY_HOPS`).
+>
+> Ce qui reste vrai : un accès en **`http://` depuis Internet** (redirection directe du port 8096) fait circuler les mots de passe en clair — utilisez toujours HTTPS (voie A ou B5). Pas de double authentification ni de journal des connexions. Les anciens liens `?password=` restent acceptés pendant la transition ; pour les refuser, `SHARE_PASSWORD_QUERY_COMPAT=0`.
+>
+> **Recommandation :** la **voie A (Tailscale privé)** reste la plus sûre, car elle n’ouvre rien sur Internet. La voie B est raisonnable **une fois la phase 0 fusionnée et installée**, avec le §2.2 fait et un compte `user` par invité, limité à ses bibliothèques (§4). Tant que la PR n’est pas fusionnée, l’ancien avertissement s’applique : cookie sans `secure`, pas de HSTS/CSP, mot de passe de partage dans l’URL, sessions en mémoire.
 
 ### Voie A — Tailscale, réseau privé (recommandée) 🟢
 
@@ -155,7 +178,7 @@ Rien n’est ouvert sur la Freebox. Seuls les appareils invités dans votre rés
 3. Dans NAS Simple Media : **Administration → 🌐 Accès externe** → collez cette adresse → **Enregistrer**. Les liens de partage et QR codes l’utiliseront.
 4. Avec cette adresse HTTPS, l’appli web s’installe sur téléphone (PWA 🟢).
 
-> `tailscale serve` reste **privé** : seuls les appareils de votre tailnet y accèdent. `tailscale funnel` rendrait le serveur **public** ; ne l’utilisez pas avant la phase sécurité (voir l’avertissement plus haut).
+> `tailscale serve` reste **privé** : seuls les appareils de votre tailnet y accèdent. `tailscale funnel` rendrait le serveur **public** : à éviter tant que la phase 0 🟡 n’est pas installée, et même ensuite, n’activez-le que si vos invités ne peuvent pas utiliser Tailscale (voir l’avertissement plus haut).
 
 **A3. Donner l’accès à vos amis**
 
@@ -230,7 +253,7 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
 2. Dans la fenêtre « Lien de partage », réglez les options :
    - **Expiration (optionnel)** : date et heure, ou les raccourcis **+24h**, **+7 jours** et **+30 jours** ;
    - **Utilisations max** : nombre de lectures autorisées ;
-   - **Mot de passe (optionnel)**.
+   - **Mot de passe (optionnel)**. 🟡 *(phase 0)* L’invité le tape une fois ; il est échangé contre un jeton valable **12 h** et n’apparaît jamais dans les liens de lecture, VLC ou `.m3u`. Après 12 h, l’invité retape le mot de passe (et retélécharge le `.m3u` le cas échéant).
 3. **Créer**, puis **Copier le lien** ou **QR Code**. Le lien a la forme `https://<votre-adresse>/s/<jeton>`.
 4. Si la fenêtre affiche **⚠️ Ce lien utilise une adresse locale**, cliquez sur **Configurer l’adresse externe**, puis reprenez le §3.
 5. **Révoquer** : menu **🔗 Mes partages** → **Révoquer** sur la ligne concernée, puis confirmez.
@@ -264,7 +287,8 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
    - voie B : `mon-nas.synology.me` ;
    - à la maison : `192.168.1.50`, complété en `http://192.168.1.50:8096`.
 3. **Vérifier et continuer**. Si un avertissement jaune « adresse publique en http:// » apparaît, demandez l’adresse HTTPS à l’administrateur.
-4. Écran **Connexion** : saisissez votre **Utilisateur** et votre **Mot de passe**. Laissez cochée **Se souvenir du mot de passe (chiffré sur l’appareil)** pour être reconnecté automatiquement après un redémarrage du NAS. Puis **Se connecter**.
+4. Écran **Connexion** : saisissez votre **Utilisateur** et votre **Mot de passe**. Laissez cochée **Se souvenir du mot de passe (chiffré sur l’appareil)** pour être reconnecté automatiquement si la session expire. Puis **Se connecter**.
+   🟡 *(phase 0)* Si le message « Ce compte utilise encore le mot de passe par défaut… » s’affiche, changez-le d’abord dans un navigateur (§2.2), puis reconnectez-vous.
 
 **5.4 Lire un média**
 
@@ -279,7 +303,7 @@ Chaque invité installe ensuite Tailscale sur ses appareils (§5, §6, §7), pui
 
 **5.5 Ouvrir un lien de partage**
 
-Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aussi le coller dans **Mes serveurs → Ouvrir un lien de partage → Ouvrir**. Le mot de passe du partage est demandé si nécessaire.
+Touchez un lien `https://…/s/…` et choisissez **NAS Media**. Vous pouvez aussi le coller dans **Mes serveurs → Ouvrir un lien de partage → Ouvrir**. Le mot de passe du partage est demandé si nécessaire (🟡 *(phase 0)* envoyé une seule fois au serveur, il n’apparaît plus dans les adresses de lecture ; il faut l’appli **0.2.0**).
 
 ---
 
@@ -342,7 +366,11 @@ L’appli **NAS Media** apparaît dans le lanceur TV avec sa bannière orange.
 |---|---|---|
 | **Serveur injoignable** / « Vérifier et continuer » échoue | Tailscale coupé sur l’appareil (voie A) ; mauvaise adresse ; NAS éteint ; certificat ou redirection manquants (voie B) | Activez Tailscale et vérifiez que le NAS apparaît connecté. Vérifiez l’adresse (`https://` pour `.ts.net` et `synology.me`, `http://…:8096` en local). Admin : `start-stop-status status` (SPK) ou `docker compose ps` (Docker). Testez en 4G/5G avec le Wi-Fi coupé. |
 | « Ce n’est pas un serveur NAS Simple Media » | L’adresse pointe vers DSM ou vers un autre service | Utilisez l’adresse du proxy inversé (B5) ou le port **8096** en local, pas le port 5000/5001 de DSM. |
-| **Session perdue après un redémarrage du NAS** (retour à l’écran de connexion) | Les sessions sont gardées en mémoire par le serveur | Appli Android : si « Se souvenir du mot de passe » était cochée, la reconnexion est automatique ; sinon, reconnectez-vous. Navigateur : reconnectez-vous. Le problème disparaîtra avec la phase sécurité (sessions en base). |
+| **Session perdue après un redémarrage du NAS** (retour à l’écran de connexion) | Version ≤ 1.5.1 : sessions gardées en mémoire. 🟡 *(phase 0)* sessions en base : ne se produit plus qu’une fois, juste après la mise à jour 1.6.0, ou après 7 jours | Appli Android : si « Se souvenir du mot de passe » était cochée, la reconnexion est automatique ; sinon, reconnectez-vous. Navigateur : reconnectez-vous. |
+| 🟡 « Nouveau mot de passe obligatoire » (web) ou « Ce compte utilise encore le mot de passe par défaut » (Android) | Le compte utilise toujours `changeme` | §2.2 : choisissez un mot de passe d’au moins 10 caractères dans le navigateur, puis reconnectez l’appli. |
+| 🟡 « Compte temporairement verrouillé après trop d’échecs » | 10 mauvais mots de passe sur ce compte en 15 min (le blocage ne s’applique qu’aux connexions venant d’Internet) | Attendez 15 min, ou connectez-vous depuis le réseau local (jamais verrouillé). Si vous ne reconnaissez pas ces essais, changez le mot de passe. |
+| 🟡 Docker : le conteneur redémarre en boucle, « DATA_PATH … n'est pas accessible en écriture » | Image non-root depuis 1.6.0 | `sudo chown -R 1000:1000 /volume1/docker/nas-simple-media/data` (§2.1), puis `sudo docker compose up -d`. |
+| 🟡 Le `.m3u` / lien VLC d’un partage protégé ne marche plus | Le jeton d’accès du partage a expiré (12 h) | Rouvrez le lien `/s/…`, retapez le mot de passe et retéléchargez le `.m3u`. |
 | **La vidéo ne démarre pas**, ou elle saccade | Débit insuffisant ; codec non lu par l’appareil ; conversion trop lourde pour le NAS | **Baissez la qualité** (Options → 720p puis 480p). Si « Lecture directe impossible : passage en mode Compatible (HLS) » s’affiche, laissez la conversion démarrer (« Le serveur prépare le flux… »). Une seule conversion tourne à la fois par défaut (`TRANSCODE_MAX_JOBS=1`) : attendez que l’autre lecture se termine. |
 | **Impossible d’avancer loin** dans une vidéo en mode converti | Le serveur convertit depuis le début ; la partie demandée n’existe pas encore | Patientez, ou passez en **Original** / **Auto** si l’appareil sait lire le fichier : l’avance rapide est alors immédiate. Limite connue, amélioration prévue (conversion qui démarre au point de reprise). |
 | Bibliothèque vide | Droits manquants pour `sc-nas-simple-media` (SPK) ou mauvais chemin | §2.1, étape 6, puis **Rescan** dans **Administration → 📚 Bibliothèques**. |
