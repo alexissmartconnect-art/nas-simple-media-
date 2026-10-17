@@ -46,11 +46,13 @@ describe('stream tokens + URL helpers', () => {
     assert.ok(m3u.includes(url));
   });
 
-  it('builds share stream URL with optional password', () => {
+  it('builds share stream URL with an optional signed access token (never a password)', () => {
     const u1 = buildShareRawStreamUrl('sharetok');
     assert.ok(u1.includes('/api/public/stream/sharetok'));
-    const u2 = buildShareRawStreamUrl('sharetok', 'secret');
-    assert.ok(u2.includes('password=secret'));
+    assert.equal(u1.includes('?'), false);
+    const u2 = buildShareRawStreamUrl('sharetok', 'v1.abc.sig');
+    assert.ok(u2.includes('access=v1.abc.sig'));
+    assert.equal(u2.includes('password='), false);
     const u3 = buildShareRawStreamUrl('sharetok', undefined, 42, 'https://media.example');
     assert.ok(u3.includes('/api/public/share/sharetok/item/42/stream'));
   });
