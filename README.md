@@ -240,7 +240,7 @@ Sans ce réglage, DSM refuse d’installer un paquet non signé par Synology.
 ### 3. Installer le paquet
 
 **Centre de paquets → Installation manuelle →** sélectionner
-`nas-simple-media-<version>-geminilake.spk` (dernière version : **1.6.0**).
+`nas-simple-media-<version>-geminilake.spk` (dernière version : **1.6.1**).
 
 Le service démarre automatiquement sur le port **8096**.
 
@@ -290,7 +290,7 @@ Identiques à la section [Variables d’environnement](#variables-denvironnement
 npm ci
 npm test          # 157 tests
 npm run build
-npm run spk       # -> dist-spk/nas-simple-media-1.6.0-geminilake.spk
+npm run spk       # -> dist-spk/nas-simple-media-1.6.1-geminilake.spk
 ```
 
 Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié sur
