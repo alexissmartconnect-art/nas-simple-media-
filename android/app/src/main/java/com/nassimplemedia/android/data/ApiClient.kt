@@ -19,6 +19,20 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class ApiException(val code: Int, message: String) : IOException(message)
+
+/**
+ * The account still uses the factory password (`changeme`): the server refuses
+ * everything until it is changed. The app does not offer that form; the user
+ * is told to change it in the web interface, then log in again.
+ */
+class PasswordChangeRequiredException(message: String) : IOException(message)
+
+const val PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
+
+fun passwordChangeMessage(base: String): String =
+    "Ce compte utilise encore le mot de passe par défaut. Pour votre sécurité, changez-le d’abord " +
+        "dans l’interface web (${base.trimEnd('/')}/login.html), puis reconnectez-vous ici avec le nouveau mot de passe."
+
 class AuthExpiredException : IOException("Session expirée — reconnectez-vous")
 
 /**
@@ -81,9 +95,18 @@ class ApiClient(private val client: OkHttpClient = Session.http) {
             if (r.code == 401 && b == Session.baseUrl && path.startsWith("/api/") && !path.startsWith("/api/public/")) {
                 throw AuthExpiredException()
             }
+            if (r.code == 403 && codeOf(body) == PASSWORD_CHANGE_REQUIRED) {
+                throw PasswordChangeRequiredException(passwordChangeMessage(b))
+            }
             if (!r.isSuccessful) throw ApiException(r.code, errorOf(body, r.code))
             return body
         }
+    }
+
+    private fun codeOf(body: String): String? = try {
+        json.decodeFromString<ErrorBody>(body).code
+    } catch (_: Exception) {
+        null
     }
 
     private suspend inline fun <reified T> get(path: String, base: String? = Session.baseUrl): T =
@@ -121,8 +144,19 @@ class ApiClient(private val client: OkHttpClient = Session.http) {
             val token = r.headers("Set-Cookie")
                 .firstNotNullOfOrNull { parseCookie(it, Session.COOKIE_NAME) }
                 ?: throw IOException("Le serveur n’a pas renvoyé de session")
-            val user = json.decodeFromString<LoginResponse>(text).user
-                ?: throw IOException("Réponse de connexion invalide")
+            val parsed = json.decodeFromString<LoginResponse>(text)
+            val user = parsed.user ?: throw IOException("Réponse de connexion invalide")
+            if (parsed.mustChangePassword || user.mustChangePassword) {
+                // Do not keep a session that can do nothing; ask for the change on the web.
+                runCatching {
+                    exec(
+                        Request.Builder().url(url(base, "/api/logout"))
+                            .header("Cookie", "${Session.COOKIE_NAME}=$token")
+                            .post("{}".toRequestBody(jsonType)).build()
+                    ).close()
+                }
+                throw PasswordChangeRequiredException(passwordChangeMessage(base))
+            }
             return user to token
         }
     }
@@ -175,9 +209,23 @@ class ApiClient(private val client: OkHttpClient = Session.http) {
     }
 
     // ---- Guest shares ----
-    suspend fun share(base: String, token: String, password: String?): ShareInfo {
-        val qs = if (password.isNullOrEmpty()) "" else "?password=${enc(password)}"
+    /** Share info. [accessToken] comes from [unlockShare]; the password never goes in a URL. */
+    suspend fun share(base: String, token: String, accessToken: String?): ShareInfo {
+        val qs = if (accessToken.isNullOrEmpty()) "" else "?access=${enc(accessToken)}"
         return get("/api/public/share/${enc(token)}$qs", base)
+    }
+
+    /** POSTs the share password once and returns the short-lived signed access token. */
+    suspend fun unlockShare(base: String, token: String, password: String): String? {
+        val body = json.encodeToString(buildJsonObject { put("password", password) })
+        val req = Request.Builder().url(url(base, "/api/public/share/${enc(token)}/unlock"))
+            .post(body.toRequestBody(jsonType)).build()
+        exec(req).use { r ->
+            val text = r.body?.string().orEmpty()
+            if (r.code == 404) throw ApiException(404, "Serveur trop ancien : mettez NAS Simple Media à jour (1.6+)")
+            if (!r.isSuccessful) throw ApiException(r.code, errorOf(text, r.code))
+            return json.decodeFromString<ShareUnlock>(text).accessToken
+        }
     }
 
     suspend fun streams(base: String, path: String): StreamsInfo = get(path, base)

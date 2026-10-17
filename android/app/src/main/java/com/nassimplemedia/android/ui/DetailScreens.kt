@@ -35,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -149,10 +151,13 @@ fun DetailScreen(nav: NavViewModel, mediaId: Int) {
 fun ShareScreen(nav: NavViewModel, serverUrl: String, token: String) {
     val api = NasApp.instance.api
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var password by remember { mutableStateOf("") }
-    var submitted by remember { mutableStateOf<String?>(null) }
-    val (state, retry) = rememberLoad(serverUrl, token, submitted, onAuthExpired = {}) {
-        api.share(serverUrl, token, submitted)
+    var accessToken by remember { mutableStateOf<String?>(null) }
+    var unlockError by remember { mutableStateOf<String?>(null) }
+    var unlocking by remember { mutableStateOf(false) }
+    val (state, retry) = rememberLoad(serverUrl, token, accessToken, onAuthExpired = {}) {
+        api.share(serverUrl, token, accessToken)
     }
     Column(Modifier.fillMaxSize()) {
         TopBar(stringResource(R.string.share_title), onBack = { if (!nav.back()) nav.reset(Screen.Servers) })
@@ -173,10 +178,25 @@ fun ShareScreen(nav: NavViewModel, serverUrl: String, token: String) {
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             modifier = Modifier.fillMaxWidth().dpadEscape().initialFocus(),
                         )
-                        NasButton(stringResource(R.string.share_open), { submitted = password })
+                        unlockError?.let { Text(it, color = Color(0xFFFF8A80)) }
+                        NasButton(stringResource(R.string.share_open), enabled = !unlocking && password.isNotEmpty(), onClick = {
+                            unlocking = true
+                            unlockError = null
+                            scope.launch {
+                                try {
+                                    // The password is POSTed once; only the signed token is kept.
+                                    accessToken = api.unlockShare(serverUrl, token, password)
+                                    password = ""
+                                } catch (e: Exception) {
+                                    unlockError = e.message ?: e.javaClass.simpleName
+                                } finally {
+                                    unlocking = false
+                                }
+                            }
+                        })
                     }
                 } else {
-                    val src = MediaSource.Share(token, submitted)
+                    val src = MediaSource.Share(token, accessToken)
                     val tv = LocalIsTv.current
                     Text(info.shareTitle ?: "", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
                     LazyVerticalGrid(
@@ -196,7 +216,7 @@ fun ShareScreen(nav: NavViewModel, serverUrl: String, token: String) {
                                     val queue = if (item.isVideo) listOf(item) else info.items.filter { !it.isVideo }
                                     PlayerLauncher.play(
                                         ctx, serverUrl, queue, queue.indexOf(item).coerceAtLeast(0), 0,
-                                        info.transcodeEnabled, shareToken = token, sharePassword = submitted,
+                                        info.transcodeEnabled, shareToken = token, shareAccess = accessToken,
                                     )
                                 },
                             )

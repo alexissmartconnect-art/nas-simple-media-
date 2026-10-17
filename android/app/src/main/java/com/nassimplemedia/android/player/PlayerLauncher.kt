@@ -9,7 +9,7 @@ import kotlinx.serialization.json.Json
 object PlayerLauncher {
     const val EXTRA_BASE = "base"
     const val EXTRA_SHARE_TOKEN = "share_token"
-    const val EXTRA_SHARE_PASSWORD = "share_password"
+    const val EXTRA_SHARE_ACCESS = "share_access"
     const val EXTRA_TRANSCODE = "transcode"
     const val EXTRA_START_MS = "start_ms"
     const val EXTRA_QUEUE = "queue"
@@ -24,7 +24,7 @@ object PlayerLauncher {
         startMs: Long = 0,
         transcodeEnabled: Boolean = true,
         shareToken: String? = null,
-        sharePassword: String? = null,
+        shareAccess: String? = null,
     ) {
         val intent = Intent(context, PlayerActivity::class.java)
             .putExtra(EXTRA_BASE, base)
@@ -33,7 +33,7 @@ object PlayerLauncher {
             .putExtra(EXTRA_START_MS, startMs)
             .putExtra(EXTRA_TRANSCODE, transcodeEnabled)
             .putExtra(EXTRA_SHARE_TOKEN, shareToken)
-            .putExtra(EXTRA_SHARE_PASSWORD, sharePassword)
+            .putExtra(EXTRA_SHARE_ACCESS, shareAccess)
         context.startActivity(intent)
     }
 }

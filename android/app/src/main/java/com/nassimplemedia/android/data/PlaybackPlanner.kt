@@ -92,9 +92,10 @@ sealed class MediaSource {
         override fun streamsPath(mediaId: Int) = "/api/media/$mediaId/streams"
     }
 
-    data class Share(val token: String, val password: String?) : MediaSource() {
+    /** Guest share. [accessToken]: signed token from POST …/unlock (never the share password). */
+    data class Share(val token: String, val accessToken: String?) : MediaSource() {
         private val base get() = "/api/public/share/${enc(token)}/item"
-        private val pw get() = if (password.isNullOrEmpty()) "" else "password=${enc(password)}"
+        private val pw get() = if (accessToken.isNullOrEmpty()) "" else "access=${enc(accessToken)}"
         private fun withPw(path: String) = if (pw.isEmpty()) path else path + (if ('?' in path) "&" else "?") + pw
         override fun rawPath(mediaId: Int) = withPw("$base/$mediaId/stream")
         override fun hlsStartPath(mediaId: Int, quality: String, audio: Int) =
