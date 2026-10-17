@@ -10,7 +10,7 @@ plugins {
 // Absent env → debug keeps the local debug key, release stays unsigned.
 val ciKeystore = System.getenv("ANDROID_KEYSTORE_FILE")
     ?.takeIf { it.isNotBlank() }
-    ?.let { java.io.File(it) }
+    ?.let { file(it) }
     ?.takeIf { it.isFile }
 val ciStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
 val ciKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
