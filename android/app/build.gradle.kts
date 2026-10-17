@@ -35,12 +35,16 @@ android {
     }
 
     if (useCiSigning) {
+        val store = ciKeystore!!
+        val storePass = ciStorePassword!!
+        val alias = ciKeyAlias!!
+        val keyPass = ciKeyPassword!!
         signingConfigs {
             create("ci") {
-                storeFile = ciKeystore
-                storePassword = ciStorePassword
-                keyAlias = ciKeyAlias
-                keyPassword = ciKeyPassword
+                storeFile = store
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
             }
         }
     }

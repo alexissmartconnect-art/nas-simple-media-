@@ -116,7 +116,7 @@ jobs:
 
       - name: Tests et construction
         working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease
+        run: bash ci/gradle-ci.sh testDebugUnitTest assembleDebug assembleRelease
 
       - name: Vérifier l'User-Agent dans les APK
         run: |
