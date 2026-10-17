@@ -171,7 +171,7 @@ fun ShareScreen(nav: NavViewModel, serverUrl: String, token: String) {
                             label = { Text(stringResource(R.string.login_password)) },
                             singleLine = true, visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().dpadEscape().initialFocus(),
                         )
                         NasButton(stringResource(R.string.share_open), { submitted = password })
                     }
@@ -191,7 +191,7 @@ fun ShareScreen(nav: NavViewModel, serverUrl: String, token: String) {
                                 subtitle = subtitleOf(item),
                                 imageUrl = if (item.isVideo) serverUrl.trimEnd('/') + src.thumbPath(item.id) else null,
                                 fallbackIcon = iconFor(item.kind),
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().initialFocus(item == info.items.first()),
                                 onClick = {
                                     val queue = if (item.isVideo) listOf(item) else info.items.filter { !it.isVideo }
                                     PlayerLauncher.play(

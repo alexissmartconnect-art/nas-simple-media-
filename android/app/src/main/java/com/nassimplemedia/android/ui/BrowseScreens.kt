@@ -156,7 +156,7 @@ fun HomeScreen(nav: NavViewModel) {
 }
 
 @Composable
-fun MediaGrid(items: List<MediaItem>, nav: NavViewModel, header: (@Composable () -> Unit)? = null) {
+fun MediaGrid(items: List<MediaItem>, nav: NavViewModel, focusFirst: Boolean = true, header: (@Composable () -> Unit)? = null) {
     val tv = LocalIsTv.current
     LazyVerticalGrid(
         columns = GridCells.Adaptive(if (tv) 220.dp else 150.dp),
@@ -173,7 +173,7 @@ fun MediaGrid(items: List<MediaItem>, nav: NavViewModel, header: (@Composable ()
                 imageUrl = thumbUrl(item),
                 fallbackIcon = iconFor(item.kind),
                 width = if (tv) 220.dp else 200.dp,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().initialFocus(focusFirst && item == items.first()),
                 onClick = { nav.go(Screen.Detail(item.id)) },
             )
         }
@@ -208,7 +208,7 @@ fun LibraryScreen(nav: NavViewModel, library: Library) {
                                     subtitle = stringResource(R.string.seasons_count, show.seasons, show.episodes),
                                     imageUrl = show.posterMediaId?.let { Session.absolute(MediaSource.Session.thumbPath(it)) },
                                     fallbackIcon = iconFor("series"),
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().initialFocus(show == s.data.first()),
                                     onClick = { nav.go(Screen.Show(library.id, show.name)) },
                                 )
                             }
@@ -226,7 +226,7 @@ fun LibraryScreen(nav: NavViewModel, library: Library) {
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(s.data, key = { it.name }) { artist ->
-                            FocusRow(onClick = { nav.go(Screen.Artist(library.id, artist.name)) }) {
+                            FocusRow(modifier = Modifier.initialFocus(artist == s.data.first()), onClick = { nav.go(Screen.Artist(library.id, artist.name)) }) {
                                 Column {
                                     Text(artist.name, style = MaterialTheme.typography.titleMedium)
                                     Text(stringResource(R.string.albums_count, artist.albums, artist.tracks), color = Color(0xFFAAAAAA))
@@ -283,7 +283,7 @@ fun ShowScreen(nav: NavViewModel, libraryId: Int, name: String) {
                 val episodes = (bySeason[current] ?: emptyList()).sortedWith(compareBy({ it.episode ?: Int.MAX_VALUE }, { it.title }))
                 LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(episodes, key = { it.id }) { ep ->
-                        FocusRow(onClick = { nav.go(Screen.Detail(ep.id)) }) {
+                        FocusRow(modifier = Modifier.initialFocus(ep == episodes.first()), onClick = { nav.go(Screen.Detail(ep.id)) }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 AsyncImage(
                                     model = thumbUrl(ep), contentDescription = null,
@@ -330,7 +330,7 @@ fun ArtistScreen(nav: NavViewModel, libraryId: Int, name: String) {
                                 Text(album, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                                 NasButton(stringResource(R.string.play_all), {
                                     PlayerLauncher.play(ctx, Session.baseUrl!!, tracks, 0)
-                                }, primary = false)
+                                }, Modifier.initialFocus(album == albums.firstKey()), primary = false)
                             }
                         }
                         items(tracks, key = { it.id }) { t ->
@@ -362,7 +362,7 @@ fun SearchScreen(nav: NavViewModel) {
             placeholder = { Text(stringResource(R.string.search_hint)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).focusRequester(focus),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).focusRequester(focus).dpadEscape(),
         )
         LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
         when (val s = state) {
@@ -371,7 +371,7 @@ fun SearchScreen(nav: NavViewModel) {
             is Load.Ok -> if (s.data.isEmpty() && debounced.length >= 2) {
                 Text(stringResource(R.string.search_empty), modifier = Modifier.padding(16.dp))
             } else {
-                MediaGrid(s.data, nav)
+                MediaGrid(s.data, nav, focusFirst = false)
             }
         }
         Spacer(Modifier.height(8.dp))

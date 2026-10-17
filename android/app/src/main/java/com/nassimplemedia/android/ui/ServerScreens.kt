@@ -58,7 +58,7 @@ fun ServersScreen(nav: NavViewModel) {
                 item { Text(stringResource(R.string.servers_empty), color = Color(0xFFBBBBBB)) }
             }
             items(servers, key = { it.id }) { s ->
-                FocusRow(onClick = {
+                FocusRow(modifier = Modifier.initialFocus(s == servers.first()), onClick = {
                     app.activate(s)
                     if (s.token != null) nav.reset(Screen.Home) else nav.go(Screen.Login(s.id))
                 }) {
@@ -81,7 +81,7 @@ fun ServersScreen(nav: NavViewModel) {
             }
             item {
                 Spacer(Modifier.height(8.dp))
-                NasButton(stringResource(R.string.server_add), { nav.go(Screen.AddServer()) })
+                NasButton(stringResource(R.string.server_add), { nav.go(Screen.AddServer()) }, Modifier.initialFocus(servers.isEmpty()))
             }
             item {
                 Spacer(Modifier.height(24.dp))
@@ -92,7 +92,7 @@ fun ServersScreen(nav: NavViewModel) {
                     placeholder = { Text(stringResource(R.string.share_link_hint)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 600.dp),
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 600.dp).dpadEscape(),
                     isError = shareError != null,
                     supportingText = { shareError?.let { Text(it) } },
                 )
@@ -127,7 +127,7 @@ fun AddServerScreen(nav: NavViewModel, prefill: String) {
                 placeholder = { Text(stringResource(R.string.server_url_hint)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().dpadEscape().initialFocus(),
                 supportingText = { normalized?.let { Text("→ $it") } },
             )
             OutlinedTextField(
@@ -135,7 +135,7 @@ fun AddServerScreen(nav: NavViewModel, prefill: String) {
                 onValueChange = { name = it },
                 label = { Text(stringResource(R.string.server_name)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().dpadEscape(),
             )
             if (normalized != null && ServerUrls.isInsecurePublic(normalized)) {
                 Text(stringResource(R.string.server_insecure_warning), color = Color(0xFFFFC107))
@@ -197,14 +197,14 @@ fun LoginScreen(nav: NavViewModel, serverId: String) {
                 value = username, onValueChange = { username = it },
                 label = { Text(stringResource(R.string.login_username)) }, singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().dpadEscape().initialFocus(username.isBlank()),
             )
             OutlinedTextField(
                 value = password, onValueChange = { password = it },
                 label = { Text(stringResource(R.string.login_password)) }, singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().dpadEscape().initialFocus(username.isNotBlank()),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = keepPassword, onCheckedChange = { keepPassword = it })

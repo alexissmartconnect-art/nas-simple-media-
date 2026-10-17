@@ -52,6 +52,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -94,6 +104,36 @@ fun NasTheme(content: @Composable () -> Unit) {
         ),
         content = content,
     )
+}
+
+/** TV: gives this element the focus when the screen opens (D-pad starting point). */
+@Composable
+fun Modifier.initialFocus(enabled: Boolean = true): Modifier {
+    val tv = LocalIsTv.current
+    val requester = remember { FocusRequester() }
+    // Keyed on `tv` only: evaluated once when the screen opens, so a later change of
+    // `enabled` (e.g. typing a username) never steals the focus.
+    LaunchedEffect(tv) {
+        if (tv && enabled) {
+            delay(200)
+            runCatching { requester.requestFocus() }
+        }
+    }
+    return if (tv) this.focusRequester(requester) else this
+}
+
+/** TV: lets the D-pad leave a text field (Compose keeps up/down inside it otherwise). */
+@Composable
+fun Modifier.dpadEscape(): Modifier {
+    val fm = LocalFocusManager.current
+    return this.onPreviewKeyEvent { e ->
+        if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when (e.key) {
+            Key.DirectionUp -> fm.moveFocus(FocusDirection.Up)
+            Key.DirectionDown -> fm.moveFocus(FocusDirection.Down)
+            else -> false
+        }
+    }
 }
 
 /** Visible focus ring for D-pad navigation (TV) on any clickable element. */
