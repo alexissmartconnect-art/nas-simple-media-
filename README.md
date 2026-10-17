@@ -240,7 +240,7 @@ Sans ce réglage, DSM refuse d’installer un paquet non signé par Synology.
 ### 3. Installer le paquet
 
 **Centre de paquets → Installation manuelle →** sélectionner
-`nas-simple-media-1.3.0-geminilake.spk`.
+`nas-simple-media-<version>-geminilake.spk` (dernière version : **1.6.0**).
 
 Le service démarre automatiquement sur le port **8096**.
 
@@ -288,7 +288,7 @@ Identiques à la section [Variables d’environnement](#variables-denvironnement
 
 ```bash
 npm ci
-npm test          # 122 tests
+npm test          # 157 tests
 npm run build
 npm run spk       # -> dist-spk/nas-simple-media-1.6.0-geminilake.spk
 ```
@@ -423,7 +423,7 @@ des sessions dans l’interface, suppression définitive de `?password=`.
 | `ADMIN_PASSWORD` | `changeme` | Mot de passe initial `admin` |
 | `PUBLIC_BASE_URL` | `http://localhost:8096` | Base des liens partage / VLC (ex. `https://mon-nas.synology.me`) |
 | `TRUST_PROXY_HOPS` | `loopback, linklocal, uniquelocal` | Proxys autorisés à fixer `X-Forwarded-For/Proto/Host` : liste de sous-réseaux (syntaxe Express), nombre de sauts (`1`), ou `0`/`false` = personne. Jamais « tout le monde » |
-| `TRUST_PROXY` | `1` | Ancien réglage : `0` = `TRUST_PROXY_HOPS=0`, `1` = défaut sûr ci-dessus |
+| `TRUST_PROXY` | *(non défini)* | Ancien réglage (facultatif) : `0` = `TRUST_PROXY_HOPS=0`, `1` = défaut sûr ci-dessus |
 | `SESSION_SECRET` | *(généré)* | Secret HMAC (jetons de partage). Absent → 256 bits aléatoires dans `DATA_PATH/session.secret` (mode 600) |
 | `PASSWORD_MIN_LENGTH` | `10` | Longueur minimale des nouveaux mots de passe (min. 8) |
 | `LOGIN_RATE_PER_MIN` | `20` | Requêtes `/api/login` max par IP et par minute |

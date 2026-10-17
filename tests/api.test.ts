@@ -576,12 +576,12 @@ describe('security, scanner, shares, HLS helpers & HTTP API', () => {
     });
   });
 
-  it('announces on the login page whether the default admin password is still active', async () => {
+  it('never advertises the factory password when ADMIN_PASSWORD is custom', async () => {
     const res = await fetch(`${baseUrl}/api/setup/status`);
     assert.equal(res.status, 200);
     const data = (await res.json()) as { defaultAdminUser: string; defaultAdminActive: boolean };
     assert.equal(data.defaultAdminUser, 'admin');
-    assert.equal(data.defaultAdminActive, true, 'ADMIN_PASSWORD is still the seeded one');
+    assert.equal(data.defaultAdminActive, false, 'a custom ADMIN_PASSWORD is not the factory password');
 
     const { getUser, changeOwnPassword } = await import('../src/users/users');
     const admin = getUser(1)!;

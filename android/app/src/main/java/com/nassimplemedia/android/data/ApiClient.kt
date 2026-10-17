@@ -65,7 +65,7 @@ object Session {
             .readTimeout(60, TimeUnit.SECONDS)
             .addInterceptor(interceptor)
             .addInterceptor { chain ->
-                chain.proceed(chain.request().newBuilder().header("User-Agent", "NASMedia-Android/0.1").build())
+                chain.proceed(chain.request().newBuilder().header("User-Agent", "NASMedia-Android/0.2.0").build())
             }
             .build()
     }
