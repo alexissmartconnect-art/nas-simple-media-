@@ -55,10 +55,16 @@ jobs:
           set -euo pipefail
           spk=$(ls dist-spk/*.spk)
           tar -xOf "$spk" package.tgz > /tmp/package.tgz
-          tar -tzf /tmp/package.tgz | grep -qx 'app/bin/ffmpeg'
-          tar -tzf /tmp/package.tgz | grep -qx 'app/bin/ffprobe'
-          tar -tzf /tmp/package.tgz | grep -qx 'app/port_conf/nas-simple-media.sc'
-          tar -tzf /tmp/package.tgz | grep -qx 'app/docs/README.md'
+          # List once: piping into grep -q makes tar die on SIGPIPE, which
+          # pipefail would report as a spurious failure.
+          tar -tzf /tmp/package.tgz > /tmp/package.list
+          for entry in app/bin/ffmpeg app/bin/ffprobe \
+                       app/port_conf/nas-simple-media.sc app/docs/README.md; do
+            if ! grep -qx "$entry" /tmp/package.list; then
+              echo "::error::missing $entry in package.tgz"
+              exit 1
+            fi
+          done
           echo "bundled ffmpeg, port descriptor and documentation present"
 
       - name: List artefact
