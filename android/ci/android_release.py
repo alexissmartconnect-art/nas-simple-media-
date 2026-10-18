@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 
 USER_AGENT = "NASMedia-Android/0.2.1"
-SERVER_RELEASE_TAG = "v1.6.1"
+SERVER_RELEASE_TAG = "v1.7.0"
 REFERENCE_TAG = "v1.6.0"
 REFERENCE_ASSET = "nas-simple-media-0.2.0-debug.apk"
 TEST_ASSET_NAME = "nas-simple-media-0.2.1-TEST-NOT-AN-UPDATE.apk"
@@ -937,7 +937,7 @@ def cmd_self_check(_: argparse.Namespace) -> int:
     assert normalize_sha256("AB:CD:" + "11" * 30) == "abcd" + "11" * 30
     assert is_android_tag("android-v0.2.1")
     assert not is_android_tag("v0.2.1")
-    assert not is_android_tag("v1.6.1")
+    assert not is_android_tag("v1.7.0")
     assert not is_android_tag("android-v")
     ref = {
         "package": "com.nassimplemedia.android.debug",
@@ -976,7 +976,7 @@ def cmd_self_check(_: argparse.Namespace) -> int:
     notes = render_notes(report, TEST_ASSET_NAME, None, False)
     assert "pas une mise à jour" in notes
     assert "mise à jour installable" not in notes.split("\n", 1)[0] or "pas une mise à jour" in notes
-    assert "v1.6.1" in notes
+    assert "v1.7.0" in notes
     assert USER_AGENT in notes
     assert "TEST-NOT-AN-UPDATE" in notes
     official_notes = render_notes(report, "nas-simple-media-0.2.1-debug.apk", None, True)

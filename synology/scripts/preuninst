@@ -1,20 +1,28 @@
 #!/bin/sh
-# preuninst — runs as root before the package files are removed.
+# preuninst — runs before the package files are removed.
 
 . "$(dirname "$0")/common.sh"
 
 log "pre-uninstall for ${PKGNAME}"
 
 # Stop the service so nothing holds the database open.
+# Call start-stop-status explicitly: calling "$0 stop" would re-enter this
+# script (and loop forever) because preuninst is not the service controller.
 if is_running; then
-  log "stopping running service"
-  "$0" stop 2>/dev/null || {
+  _sss="${PKGROOT}/scripts/start-stop-status"
+  [ -x "${_sss}" ] || _sss="$(dirname "$0")/start-stop-status"
+  if [ -x "${_sss}" ]; then
+    log "stopping running service"
+    "${_sss}" stop >/dev/null 2>&1 || true
+  fi
+  # Belt and braces if the controller could not be found.
+  if is_running; then
     _pid="$(cat "${PIDFILE}" 2>/dev/null)"
     [ -n "${_pid}" ] && kill -TERM "${_pid}" 2>/dev/null
     sleep 2
     [ -n "${_pid}" ] && kill -KILL "${_pid}" 2>/dev/null
     rm -f "${PIDFILE}"
-  }
+  fi
 fi
 
 # Warn about the database: it lives under the package dir and DSM removes it.
@@ -27,6 +35,8 @@ if [ -f "${VAR_DIR}/library.db" ]; then
 
  Back it up first if you want to keep users, libraries and share links:
    cp ${VAR_DIR}/library.db /volume1/backups/
+
+ Your media files and the "media" shared folder are NOT removed.
 -------------------------------------------------------------------------------
 
 EOF

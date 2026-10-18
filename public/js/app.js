@@ -336,6 +336,17 @@
     }
   }
 
+  /** Shown when the server has no usable ffmpeg (Compatible/HLS unavailable). */
+  function ffmpegWarningHtml() {
+    if (!state.serverCaps || state.serverCaps.ffmpegAvailable !== false) return '';
+    return `<div class="warn-box">
+      <strong>Transcodage « Compatible » indisponible</strong>
+      <p>ffmpeg est introuvable sur le NAS. Installez le paquet <strong>ffmpeg6</strong>
+      (dépôt SynoCommunity) puis redémarrez NAS Simple Media. Le paquet SPK complet embarque
+      normalement ffmpeg : vérifiez que vous utilisez bien le <code>.spk</code> publié.</p>
+    </div>`;
+  }
+
   /** Guided first-run assistant: no media indexed yet (admin only). */
   function quickStartHtml() {
     return `<div class="quickstart">
@@ -344,6 +355,7 @@
         Aucun média n’est encore indexé. Trois étapes et votre serveur est prêt : choisissez vos
         dossiers, lancez un scan, puis (si besoin) publiez l’accès externe.
       </p>
+      ${ffmpegWarningHtml()}
       <div class="quickstart-grid">
         <button class="qs-card" type="button" data-qs="folders">
           <span class="qs-icon">📁</span>
@@ -1838,6 +1850,7 @@
     const jobs = data.jobs || [];
     const hw = data.hwaccel && data.hwaccel !== 'none' ? ` · HW: ${escapeHtml(data.hwaccel)}` : '';
     content.innerHTML = `
+      ${ffmpegWarningHtml()}
       <div class="toolbar">
         <span class="chip">Jobs actifs: <strong style="color:var(--text)">${data.activeCount}/${data.maxJobs}</strong>${hw}</span>
         <button class="btn btn-sm" id="btnSessionsRefresh" type="button">Actualiser</button>

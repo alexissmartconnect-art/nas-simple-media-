@@ -1,5 +1,5 @@
 #!/bin/sh
-# postuninst — runs as root after the package files are removed.
+# postuninst — runs after the package files are removed.
 
 . "$(dirname "$0")/common.sh"
 
@@ -12,13 +12,15 @@ cat <<EOF
 -------------------------------------------------------------------------------
  nas-simple-media has been uninstalled.
 
- Your media files were never touched. Only these package-owned paths are gone:
+ Your media files and the "media" shared folder were never touched.  Only
+ these package-owned paths are gone:
    ${VAR_DIR}      (SQLite database, share metadata, HLS cache)
    ${ENVFILE}      (runtime configuration)
 
  To reinstall later without losing the library database, back up
  ${VAR_DIR}/library.db beforehand and restore it into the new package's
- var/ directory after installation.
+ var/ directory after installation.  Upgrades (installing the new .spk over
+ the old one) preserve the database and configuration automatically.
 -------------------------------------------------------------------------------
 
 EOF

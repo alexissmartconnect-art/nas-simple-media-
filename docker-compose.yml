@@ -1,7 +1,7 @@
 services:
   nas-simple-media:
     build: .
-    image: nas-simple-media:1.6.1
+    image: nas-simple-media:1.7.0
     container_name: nas-simple-media
     restart: unless-stopped
     # The image runs as the unprivileged user "node" (uid/gid 1000).

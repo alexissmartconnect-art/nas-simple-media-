@@ -1,0 +1,17 @@
+#!/bin/sh
+# postupgrade — runs after the package files have been replaced.
+# Keeps the existing configuration and refreshes the generated diagnostics.
+
+. "$(dirname "$0")/common.sh"
+
+log "post-upgrade to ${SYNOPKG_PKGVER:-${VERSION:-unknown}}"
+
+ensure_dirs
+write_env_file
+ensure_media_layout
+chown_to_service
+write_install_report
+
+log "configuration kept: ${ENVFILE}"
+log "post-upgrade done"
+exit 0

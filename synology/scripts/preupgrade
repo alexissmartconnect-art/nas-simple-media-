@@ -1,0 +1,22 @@
+#!/bin/sh
+# preupgrade — runs while upgrading, after the old service has been stopped.
+# Backs up the SQLite database so a bad upgrade can always be rolled back.
+
+. "$(dirname "$0")/common.sh"
+
+log "pre-upgrade ${SYNOPKG_OLD_PKGVER:-?} -> ${SYNOPKG_PKGVER:-?}"
+
+# DSM stops the service before preupgrade.  Make sure it really is stopped so
+# the database and its WAL file are consistent when copied.
+if is_running; then
+  _sss="${PKGROOT}/scripts/start-stop-status"
+  [ -x "${_sss}" ] || _sss="$(dirname "$0")/start-stop-status"
+  if [ -x "${_sss}" ]; then
+    "${_sss}" stop >/dev/null 2>&1 || true
+  fi
+fi
+
+backup_database "${SYNOPKG_OLD_PKGVER:-preupgrade}" || warn "database backup failed; continuing the upgrade"
+
+log "pre-upgrade done"
+exit 0

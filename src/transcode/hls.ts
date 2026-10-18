@@ -59,8 +59,24 @@ export function isPlaylistPlayable(filePath: string): boolean {
   }
 }
 
+/**
+ * Compatible (HLS) playback needs both the feature flag and a runnable ffmpeg.
+ * Without a binary the UI would otherwise offer a mode that can only fail.
+ */
 export function isTranscodeEnabled(): boolean {
-  return config.TRANSCODE_ENABLED;
+  return config.TRANSCODE_ENABLED && config.FFMPEG_AVAILABLE;
+}
+
+/** Human-readable reason when Compatible playback is unavailable (null = available). */
+export function transcodeDisabledReason(): string | null {
+  if (!config.TRANSCODE_ENABLED) return 'Transcodage désactivé. Utilisez Direct ou VLC.';
+  if (!config.FFMPEG_AVAILABLE) {
+    return (
+      'ffmpeg est introuvable sur le NAS. Installez le paquet ffmpeg6 (SynoCommunity) ' +
+      'ou réinstallez le paquet SPK complet, puis redémarrez NAS Simple Media.'
+    );
+  }
+  return null;
 }
 
 function statusOf(mediaId: number, pKey: string) {

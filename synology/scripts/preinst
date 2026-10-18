@@ -1,26 +1,30 @@
 #!/bin/sh
-# preinst — runs as root before the package files are unpacked.
+# preinst — runs before the package files are unpacked.
+# Read-only checks only: preinst must not modify the system.
 
 . "$(dirname "$0")/common.sh"
 
-log "pre-install checks for ${PKGNAME} ${VERSION:-1.6.1}"
+log "pre-install checks for ${PKGNAME} ${VERSION:-1.7.0}"
 
 # --- DSM version -------------------------------------------------------------
+# Node.js v22 (and therefore node:sqlite) is available from DSM 7.2 onwards.
 _dsm_major="${SYNOPKG_DSM_VERSION_MAJOR:-7}"
-_dsm_minor="${SYNOPKG_DSM_VERSION_MINOR:-0}"
-if [ "${_dsm_major}" -lt 7 ]; then
-  die "DSM 7 or newer is required (found ${_dsm_major}.${_dsm_minor})."
+_dsm_minor="${SYNOPKG_DSM_VERSION_MINOR:-2}"
+if [ "${_dsm_major}" -lt 7 ] || { [ "${_dsm_major}" -eq 7 ] && [ "${_dsm_minor}" -lt 2 ]; }; then
+  die "DSM 7.2 or newer is required (found ${_dsm_major}.${_dsm_minor}); it provides the Node.js v22 package used by NAS Simple Media."
 fi
 log "DSM ${_dsm_major}.${_dsm_minor} detected"
 
 # --- architecture ------------------------------------------------------------
-# geminilake covers the DS220+/DS420+/DS720+/DS920+ family (Intel Celeron/Jasper Lake).
 _arch="${SYNOPKG_DSM_ARCH:-unknown}"
 log "host architecture: ${_arch}"
+if [ "${_arch}" != "unknown" ] && [ "${_arch}" != "geminilake" ]; then
+  warn "this package is built for geminilake (DS220+/DS420+/DS720+/DS920+); host reports ${_arch}."
+fi
 
-# --- dependencies ------------------------------------------------------------
+# --- Node.js -----------------------------------------------------------------
 if ! find_node >/dev/null 2>&1; then
-  warn "no Node.js runtime found yet. Install the Synology package 'Node.js v22' (DSM 7.2+) before starting."
+  warn "no Node.js runtime found yet. Package Center installs 'Node.js v22' from the Synology source before starting the service."
 else
   _node="$(find_node)"
   if node_is_supported "${_node}"; then
@@ -30,17 +34,39 @@ else
   fi
 fi
 
-if ! find_ffmpeg >/dev/null 2>&1; then
-  warn "ffmpeg not found. 'Compatible' (HLS) playback will be unavailable; install 'ffmpeg6' from SynoCommunity."
-else
-  log "ffmpeg found at $(find_ffmpeg)"
-fi
+# --- ffmpeg ------------------------------------------------------------------
+# ffmpeg6/7 from SynoCommunity is preferred when present.  Otherwise the SPK
+# ships a static ffmpeg/ffprobe so that transcoding works immediately.
+_ffmpeg="$(find_ffmpeg 2>/dev/null || true)"
+case "${_ffmpeg}" in
+  '')
+    warn "no ffmpeg found: Compatible/HLS playback will be disabled until ffmpeg6 or a bundled build is present"
+    ;;
+  "${APPDIR}/bin/ffmpeg")
+    log "no SynoCommunity ffmpeg6/7 installed: the static ffmpeg bundled in this package will be used"
+    ;;
+  *)
+    log "system ffmpeg found at ${_ffmpeg} (preferred over the bundled binary)"
+    ;;
+esac
 
 # --- port --------------------------------------------------------------------
-if command -v netstat >/dev/null 2>&1; then
+if command -v ss >/dev/null 2>&1; then
+  if ss -ltn 2>/dev/null | grep -q ":${APP_PORT} "; then
+    warn "port ${APP_PORT} already appears to be in use."
+  fi
+elif command -v netstat >/dev/null 2>&1; then
   if netstat -ltn 2>/dev/null | grep -q ":${APP_PORT} "; then
     warn "port ${APP_PORT} already appears to be in use."
   fi
+fi
+
+# --- media share -------------------------------------------------------------
+_share="$(package_share_path 2>/dev/null || true)"
+if [ -n "${_share}" ]; then
+  log "media shared folder: ${_share} (read/write permission will be applied)"
+else
+  log "the 'media' shared folder will be created automatically with Movies, Series and Music"
 fi
 
 log "pre-install checks done"

@@ -3,16 +3,24 @@
  * Build the native DSM 7 SPK package for Synology DS220+ (arch: geminilake).
  *
  *   npm run spk            -> dist-spk/nas-simple-media-<version>-<arch>.spk
+ *   npm run spk:lite       -> same, without bundling ffmpeg (transcoding then
+ *                             requires the SynoCommunity ffmpeg6 package)
  *   node synology/build-spk.mjs --keep-staging
  *
  * Layout produced inside the .spk:
  *
  *   INFO                       package metadata (DSM 7 required fields)
- *   package.tgz                payload -> /var/packages/nas-simple-media/target
  *   PACKAGE_ICON*.PNG          Package Center icons
  *   conf/privilege             run-as package user sc-nas-simple-media
- *   scripts/{pre,post}{inst,uninst},start-stop-status,common.sh
- *   LICENSE
+ *   conf/resource              auto "media" share, port/firewall entry, /dev/dri
+ *   scripts/{pre,post}{inst,uninst}, preupgrade, postupgrade,
+ *           start-stop-status, common.sh
+ *   WIZARD_UIFILES             (none: installation is non-interactive)
+ *   package.tgz                payload -> /var/packages/nas-simple-media/target
+ *
+ * The payload contains the compiled app, the web UI, the documentation, the
+ * DSM port descriptor and — unless --without-bundled-ffmpeg is used — static
+ * ffmpeg/ffprobe binaries so Compatible (HLS) playback works out of the box.
  *
  * The .spk itself is never committed: it is a release artefact only.
  */
@@ -26,13 +34,16 @@ import { fileURLToPath } from 'node:url';
 import { createTar, createTarGz } from './lib/tar.mjs';
 import { createIconPng } from './lib/icons.mjs';
 import { readInfoFile, serializeInfo } from './lib/info.mjs';
+import { stageBundledFfmpeg } from './lib/ffmpeg.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const SYNO_DIR = HERE;
 const STAGING = path.join(SYNO_DIR, 'package');
 const OUTPUT_DIR = path.join(REPO_ROOT, 'dist-spk');
+const FFMPEG_CACHE = path.join(REPO_ROOT, '.cache', 'ffmpeg');
 const KEEP_STAGING = process.argv.includes('--keep-staging');
+const BUNDLE_FFMPEG = !process.argv.includes('--without-bundled-ffmpeg');
 
 const PKG_NAME = 'nas-simple-media';
 
@@ -43,6 +54,10 @@ function fail(message) {
 
 function info(message) {
   console.log(`[spk] ${message}`);
+}
+
+function warn(message) {
+  console.warn(`[spk] WARNING: ${message}`);
 }
 
 function rmrf(target) {
@@ -75,6 +90,8 @@ function tarEntriesFromDir(rootDir, prefix = '') {
     entries.push({ name: prefix, type: 'dir', data: Buffer.alloc(0), mode: 0o755 });
   }
 
+  const executableNames = new Set(['app/bin/ffmpeg', 'app/bin/ffprobe']);
+
   const walk = (absDir, relPrefix) => {
     const items = fs.readdirSync(absDir, { withFileTypes: true });
     items.sort((a, b) => a.name.localeCompare(b.name));
@@ -90,7 +107,8 @@ function tarEntriesFromDir(rootDir, prefix = '') {
           rel.endsWith('.sh') ||
           rel.endsWith('run.sh') ||
           rel.startsWith('scripts/') ||
-          rel === 'app/bin/run.sh';
+          rel === 'app/bin/run.sh' ||
+          executableNames.has(rel);
         entries.push({
           name: rel,
           data,
@@ -102,6 +120,39 @@ function tarEntriesFromDir(rootDir, prefix = '') {
 
   walk(rootDir, prefix.replace(/\/$/, ''));
   return entries;
+}
+
+function requireFile(file, label) {
+  if (!fs.existsSync(file)) fail(`${label} missing: ${path.relative(REPO_ROOT, file)}`);
+}
+
+/** Copy the project documentation into the package. */
+function stageDocs(appDir) {
+  const docsDir = path.join(appDir, 'docs');
+  fs.mkdirSync(docsDir, { recursive: true });
+  const files = [
+    ['README.md', 'README.md'],
+    ['docs/DOP.md', 'DOP.md'],
+    ['.env.example', 'env.example'],
+    ['LICENSE', 'LICENSE'],
+    ['synology/RELEASE_NOTES.md', 'RELEASE_NOTES.md'],
+  ];
+  for (const [source, dest] of files) {
+    const from = path.join(REPO_ROOT, source);
+    requireFile(from, 'documentation');
+    fs.copyFileSync(from, path.join(docsDir, dest));
+  }
+  info(`documentation: ${files.length} files in app/docs/`);
+}
+
+/** DSM port descriptor: makes the service visible in firewall/port-forwarding. */
+function stagePortConfig(appDir) {
+  const portConfDir = path.join(appDir, 'port_conf');
+  fs.mkdirSync(portConfDir, { recursive: true });
+  const source = path.join(SYNO_DIR, 'port_conf', `${PKG_NAME}.sc`);
+  requireFile(source, 'port configuration');
+  fs.copyFileSync(source, path.join(portConfDir, `${PKG_NAME}.sc`));
+  info('port configuration: app/port_conf/nas-simple-media.sc (8096/tcp)');
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +171,7 @@ function main() {
   if (version !== pkgJson.version) {
     fail(
       `version mismatch: synology/INFO says ${version} but package.json says ${pkgJson.version}. ` +
-        'Keep both in sync (this release targets 1.2.0).'
+        'Keep both in sync.'
     );
   }
 
@@ -169,6 +220,23 @@ function main() {
   fs.chmodSync(path.join(appDir, 'bin', 'run.sh'), 0o755);
   fs.copyFileSync(pkgJsonPath, path.join(appDir, 'package.json'));
   fs.copyFileSync(path.join(REPO_ROOT, 'package-lock.json'), path.join(appDir, 'package-lock.json'));
+  stageDocs(appDir);
+  stagePortConfig(appDir);
+
+  // --- ffmpeg / ffprobe -----------------------------------------------------
+  if (BUNDLE_FFMPEG) {
+    info('bundling static ffmpeg/ffprobe (fallback when ffmpeg6 is not installed)');
+    stageBundledFfmpeg({
+      cacheDir: FFMPEG_CACHE,
+      destDir: path.join(appDir, 'bin'),
+      log: (message) => info(message),
+    });
+  } else {
+    warn(
+      'building without bundled ffmpeg (--without-bundled-ffmpeg): Compatible playback ' +
+        'will require the SynoCommunity ffmpeg6 package.'
+    );
+  }
 
   // Production dependencies, installed without running install scripts so no
   // native compilation is attempted. The app uses Node's built-in SQLite engine
@@ -187,6 +255,20 @@ function main() {
     rmrf(depsTmp);
   }
 
+  // --- payload sanity -------------------------------------------------------
+  const payloadRequired = [
+    'app/dist/index.js',
+    'app/public/index.html',
+    'app/public/vendor/hls.js/hls.min.js',
+    'app/bin/run.sh',
+    'app/port_conf/nas-simple-media.sc',
+    'app/docs/README.md',
+    'app/docs/DOP.md',
+    'app/package.json',
+  ];
+  if (BUNDLE_FFMPEG) payloadRequired.push('app/bin/ffmpeg', 'app/bin/ffprobe');
+  for (const rel of payloadRequired) requireFile(path.join(STAGING, rel), 'payload');
+
   // --- package.tgz ----------------------------------------------------------
   info('creating package.tgz');
   const payloadEntries = tarEntriesFromDir(STAGING, '');
@@ -202,13 +284,17 @@ function main() {
   // --- icons ----------------------------------------------------------------
   const icon72 = createIconPng(72);
   const icon256 = createIconPng(256);
-  info(`icons: 72x72 (${icon72.length} B), 256x256 (${icon256.length} B)`);
+  const icon64 = createIconPng(64);
+  info(
+    `icons: 64x64 (${icon64.length} B), 72x72 (${icon72.length} B), 256x256 (${icon256.length} B)`
+  );
 
   // --- assemble the SPK -----------------------------------------------------
   const spkEntries = [
     { name: 'INFO', data: infoBuffer, mode: 0o644 },
     { name: 'package.tgz', data: packageTgz, mode: 0o644 },
     { name: 'PACKAGE_ICON.PNG', data: icon72, mode: 0o644 },
+    { name: 'PACKAGE_ICON_64.PNG', data: icon64, mode: 0o644 },
     { name: 'PACKAGE_ICON_256.PNG', data: icon256, mode: 0o644 },
     { name: 'LICENSE', data: fs.readFileSync(path.join(REPO_ROOT, 'LICENSE')), mode: 0o644 },
     ...tarEntriesFromDir(path.join(SYNO_DIR, 'conf'), 'conf'),
@@ -217,15 +303,27 @@ function main() {
 
   const fileName = `${infoFields.get('package')}-${version}-${arch}.spk`;
   const outPath = path.join(OUTPUT_DIR, fileName);
-  fs.writeFileSync(outPath, createTar(spkEntries));
-  info(`wrote ${path.relative(REPO_ROOT, outPath)} (${(fs.statSync(outPath).size / 1024 / 1024).toFixed(2)} MiB)`);
+  const spkBuffer = createTar(spkEntries);
+  fs.writeFileSync(outPath, spkBuffer);
+  const sha256 = crypto.createHash('sha256').update(spkBuffer).digest('hex');
+  fs.writeFileSync(`${outPath}.sha256`, `${sha256}  ${fileName}\n`);
+  info(`wrote ${path.relative(REPO_ROOT, outPath)} (${(spkBuffer.length / 1024 / 1024).toFixed(2)} MiB)`);
+  info(`sha256: ${sha256}`);
 
   // --- self-verification ----------------------------------------------------
   info('verifying archive');
   const listing = execFileSync('tar', ['-tf', outPath], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean);
-  const expected = ['INFO', 'package.tgz', 'conf/privilege', 'scripts/start-stop-status'];
+  const expected = [
+    'INFO',
+    'package.tgz',
+    'conf/privilege',
+    'conf/resource',
+    'scripts/preupgrade',
+    'scripts/postupgrade',
+    'scripts/start-stop-status',
+  ];
   for (const item of expected) {
     if (!listing.includes(item)) fail(`verification failed: ${item} missing from ${fileName}`);
   }
@@ -236,6 +334,7 @@ function main() {
   info('done');
   console.log('');
   console.log(`  ${path.relative(REPO_ROOT, outPath)}`);
+  console.log(`  ${path.relative(REPO_ROOT, outPath)}.sha256`);
   console.log('');
   console.log('  Install: Package Center > Manual Install > select the .spk');
   console.log('          (Settings > General > Trust Level must allow all publishers)');

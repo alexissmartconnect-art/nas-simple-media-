@@ -150,5 +150,5 @@ jobs:
       - name: Signaler le blocage de signature
         if: steps.publish.outcome == 'success' && steps.publish.outputs.official != 'true'
         run: |
-          echo "::error::Mise à jour officielle bloquée : la clé de l'APK 0.2.0 n'est pas disponible dans les secrets déjà configurés. La release ${ANDROID_RELEASE_TAG} contient au plus un artefact de test, qui n'est pas une mise à jour installable. La release serveur v1.6.1 n'a pas été modifiée."
+          echo "::error::Mise à jour officielle bloquée : la clé de l'APK 0.2.0 n'est pas disponible dans les secrets déjà configurés. La release ${ANDROID_RELEASE_TAG} contient au plus un artefact de test, qui n'est pas une mise à jour installable. La release serveur n'a pas été modifiée."
           exit 1

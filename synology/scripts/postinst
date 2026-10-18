@@ -1,7 +1,10 @@
 #!/bin/sh
-# postinst — runs as root after the package files are unpacked.
+# postinst — runs after the package files are unpacked.
 #
-# Creates the runtime layout, generates the env file, and smoke-tests the app.
+# Creates the runtime layout, generates the env file, checks the SQLite engine
+# and prints an installation report.  The "media" shared folder itself is
+# created by DSM through conf/resource (data-share worker), with read/write
+# permission for the package user, so no manual ACL step is needed for it.
 
 . "$(dirname "$0")/common.sh"
 
@@ -11,6 +14,7 @@ ensure_dirs
 
 # --- runtime configuration ---------------------------------------------------
 write_env_file
+ensure_media_layout
 
 # --- ownership ---------------------------------------------------------------
 # Files under target/, var/, etc/, tmp/ are owned by the package user on DSM 7;
@@ -26,6 +30,7 @@ NODE_BIN="$(find_node)" || warn "no Node.js runtime found; install 'Node.js v22'
 if [ -n "${NODE_BIN}" ]; then
   if node_is_supported "${NODE_BIN}"; then
     log "verifying SQLite engine with Node.js $(node_version "${NODE_BIN}")"
+    NODE_FLAG="$(node_sqlite_flag "${NODE_BIN}" 2>/dev/null || true)"
     _smoke="${TMP_DIR}/sqlite-smoke.js"
     cat > "${_smoke}" <<'EOF'
 const path = require('path');
@@ -39,10 +44,10 @@ if (!row || row.a !== 1) { throw new Error('sqlite round-trip failed'); }
 process.stdout.write(activeBackend() + '\n');
 EOF
     if [ "$(id -u 2>/dev/null)" = "0" ]; then
-      _out="$(su -s /bin/sh "${SERVICE_USER}" -c "cd ${APPDIR} && ${NODE_BIN} ${_smoke}" 2>&1)"
+      _out="$(su -s /bin/sh "${SERVICE_USER}" -c "cd ${APPDIR} && ${NODE_BIN} ${NODE_FLAG} ${_smoke}" 2>&1)"
       _rc=$?
     else
-      _out="$(cd "${APPDIR}" && "${NODE_BIN}" "${_smoke}" 2>&1)"
+      _out="$(cd "${APPDIR}" && "${NODE_BIN}" ${NODE_FLAG} "${_smoke}" 2>&1)"
       _rc=$?
     fi
     if [ "${_rc}" -eq 0 ]; then
@@ -56,21 +61,52 @@ EOF
   fi
 fi
 
+# --- ffmpeg check ------------------------------------------------------------
+_ffmpeg="$(env_value FFMPEG_PATH 2>/dev/null || true)"
+[ -n "${_ffmpeg}" ] || _ffmpeg="$(find_ffmpeg || true)"
+case "${_ffmpeg}" in
+  "${APPDIR}/bin/ffmpeg") log "transcoding: bundled static ffmpeg (fallback, no ffmpeg6 installed)" ;;
+  '') warn "no ffmpeg available: Compatible/HLS playback will be disabled." ;;
+  *) log "transcoding: ${_ffmpeg}" ;;
+esac
+if [ -x "${APPDIR}/bin/ffmpeg" ]; then
+  log "bundled ffmpeg: $("${APPDIR}/bin/ffmpeg" -version 2>/dev/null | head -n 1)"
+fi
+
+# --- diagnostics -------------------------------------------------------------
+write_install_report
+
 # --- guidance ----------------------------------------------------------------
+_media="$(env_value MEDIA_PATH 2>/dev/null || true)"
+case "${_media}" in ''|auto) _media="$(default_media_path)" ;; esac
+_ip="$(detect_lan_ip)"
+[ -n "${_ip}" ] && _url="http://${_ip}:${APP_PORT}" || _url="http://<nas-ip>:${APP_PORT}"
+
 log "data directory : ${VAR_DIR}"
 log "configuration  : ${ENVFILE}"
-log "web interface  : http://<nas-ip>:${APP_PORT}/  (admin / ADMIN_PASSWORD)"
+log "media folder   : ${_media}"
+log "web interface  : ${_url}/  (admin / ADMIN_PASSWORD)"
 
 cat <<EOF
 
 -------------------------------------------------------------------------------
- nas-simple-media — one manual step is required before the service can read
- your media:
+ NAS Simple Media ${SYNOPKG_PKGVER:-${VERSION:-1.7.0}} is installed.
 
-   Control Panel > Shared Folder > Edit > Permissions
-     -> give the user "${SERVICE_USER}" read access to your media folders.
+   Web interface : ${_url}
+   Account       : admin / changeme   (change is enforced at first login)
 
- Without that ACL the scanner sees nothing.
+   Media folder  : ${_media}
+     Movies, Series and Music were created automatically.  DSM also created
+     the "media" shared folder and gave the package user read/write access,
+     so no manual ACL is required for it.
+
+   Existing folders (video, music, USB drives...):
+     Control Panel > Shared Folder > Edit > Permissions
+       -> System internal user > ${SERVICE_USER} > Read only
+     The folder explorer (Administration > Libraries > Browse) explains this
+     when a folder is protected.
+
+   Full documentation: ${APPDIR}/docs/README.md and ${APPDIR}/docs/DOP.md
 -------------------------------------------------------------------------------
 
 EOF

@@ -7,6 +7,34 @@
 
 . "$(dirname "$0")/common.sh"
 
+# Wait until /health answers.  The node runtime is already a hard dependency,
+# so use its built-in fetch instead of relying on curl/wget being installed.
+wait_for_health() {
+  _port="${1:-${APP_PORT}}"
+  _node="$(find_node 2>/dev/null || true)"
+  [ -n "${_node}" ] || return 0
+  _i=0
+  while [ "${_i}" -lt 60 ]; do
+    if "${_node}" -e "fetch('http://127.0.0.1:${_port}/health',{signal:AbortSignal.timeout(1500)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+    _i=$((_i + 1))
+  done
+  return 1
+}
+
+rotate_log() {
+  [ -f "${LOGFILE}" ] || return 0
+  _size="$(wc -c < "${LOGFILE}" 2>/dev/null | tr -d ' ')"
+  case "${_size}" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  if [ "${_size}" -gt 5242880 ]; then
+    mv -f "${LOGFILE}" "${LOGFILE}.1" 2>/dev/null || true
+  fi
+}
+
 start() {
   if is_running; then
     log "already running (pid $(cat "${PIDFILE}"))"
@@ -23,6 +51,7 @@ start() {
   [ -f "${ENVFILE}" ] || write_env_file
   ensure_dirs
   chown_to_service
+  rotate_log
 
   # Start detached, as the service user sc-nas-simple-media, stdin closed, output appended.
   # On DSM 7 Package Center already runs this script as sc-nas-simple-media.
@@ -42,7 +71,13 @@ start() {
   done
 
   if is_running; then
-    log "started (pid $(cat "${PIDFILE}")) on port ${APP_PORT}"
+    _port="$(env_value PORT 2>/dev/null || true)"
+    [ -n "${_port}" ] || _port="${APP_PORT}"
+    if wait_for_health "${_port}"; then
+      log "started (pid $(cat "${PIDFILE}")) on port ${_port}"
+      return 0
+    fi
+    warn "process $(cat "${PIDFILE}") is running but /health did not answer yet; check ${LOGFILE}"
     return 0
   fi
 
@@ -83,6 +118,7 @@ status() {
     log "running (pid $(cat "${PIDFILE}"))"
     exit 0
   fi
+  rm -f "${PIDFILE}" 2>/dev/null || true
   log "stopped"
   exit 3
 }
@@ -101,11 +137,12 @@ case "$1" in
   status)
     status
     ;;
-  save)
-    # DSM backup hook: nothing transient to preserve beyond the env file.
+  prestart|prestop)
+    # DSM may probe these before start/stop; nothing special to prepare.
     exit 0
     ;;
-  restore)
+  save|restore)
+    # DSM backup hook: the env file and var/ are already persistent.
     exit 0
     ;;
   *)
