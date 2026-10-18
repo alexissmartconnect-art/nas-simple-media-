@@ -92,7 +92,7 @@ export const EXTERNAL_ACCESS_GUIDE: ExternalAccessStep[] = [
       'Recommandé : HTTPS gratuit, certificat Let’s Encrypt, le port 8096 n’est jamais exposé à Internet.',
     recommended: true,
     steps: [
-      'Centre de paquets → installez « Node.js v22 » et « ffmpeg6 » si ce n’est pas déjà fait.',
+      'Centre de paquets → installez « Node.js v22 » : c’est la seule dépendance. ffmpeg est fourni avec le paquet SPK ; ffmpeg6 (SynoCommunity) reste facultatif et prioritaire s’il est présent.',
       'Panneau de configuration → Accès externe → DDNS → Ajouter : fournisseur « Synology », nom d’hôte au choix (ex. mon-nas), domaine synology.me.',
       'Panneau de configuration → Portail de connexion → Avancé → Proxy inversé → Créer : Source = HTTPS, nom d’hôte mon-nas.synology.me, port 443 ; Destination = HTTP, localhost, port 8096.',
       'Panneau de configuration → Sécurité → Certificat → Ajouter un certificat (Let’s Encrypt) pour mon-nas.synology.me, puis cliquez sur « Configurer » et affectez-le au service proxy inversé.',

@@ -134,6 +134,30 @@ export function parseTrustProxy(hops?: string, legacy?: string): string | number
 }
 const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY_HOPS, process.env.TRUST_PROXY);
 
+/**
+ * Is a command usable?  Absolute paths (the Synology package passes the bundled
+ * or ffmpeg6 binary) are checked directly; bare names are searched in PATH.
+ * Used to disable Compatible/HLS cleanly instead of spawning a missing binary.
+ */
+function isExecutableCommand(cmd: string): boolean {
+  const check = (candidate: string): boolean => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (path.isAbsolute(cmd)) return check(cmd);
+  return (process.env.PATH || '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .some((dir) => check(path.join(dir, cmd)));
+}
+
+const FFMPEG_AVAILABLE = isExecutableCommand(FFMPEG_PATH);
+const FFPROBE_AVAILABLE = isExecutableCommand(FFPROBE_PATH);
+
 function intEnv(key: string, def: number, min: number): number {
   const n = parseInt(process.env[key] || '', 10);
   return Number.isFinite(n) && n >= min ? n : def;
@@ -167,6 +191,9 @@ export const config = {
   TRANSCODE_ENABLED,
   FFMPEG_PATH,
   FFPROBE_PATH,
+  /** True when the configured ffmpeg/ffprobe can actually be executed. */
+  FFMPEG_AVAILABLE,
+  FFPROBE_AVAILABLE,
   TRANSCODE_MAX_JOBS,
   TRANSCODE_CACHE_TTL_MS,
   STREAM_TOKEN_TTL_MS,

@@ -1,0 +1,17 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "media",
+        "permission": {
+          "rw": ["sc-nas-simple-media"]
+        },
+        "once": false
+      }
+    ]
+  },
+  "port-config": {
+    "protocol-file": "app/port_conf/nas-simple-media.sc"
+  },
+  "video-driver": {}
+}

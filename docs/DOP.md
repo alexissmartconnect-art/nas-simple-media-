@@ -50,17 +50,31 @@ Les intitulés des menus **Synology DSM**, **Freebox OS**, **Tailscale** et **An
 #### Option SPK, paquet natif DSM 7 (recommandé sur DS220+) 🟢
 
 1. **Centre de paquets → Paramètres → Général → Niveau de confiance → *Tous les éditeurs***.
-2. **Centre de paquets** : installez **Node.js v22** (paquet Synology).
-3. Pour le transcodage, ajoutez la source SynoCommunity :
-   **Centre de paquets → Paramètres → Sources de paquets → Ajouter**, avec le nom `SynoCommunity` et l’emplacement `https://packages.synocommunity.com`. Installez ensuite **ffmpeg6**.
-4. Téléchargez le fichier `nas-simple-media-<version>-geminilake.spk` depuis
+2. Téléchargez le fichier `nas-simple-media-<version>-geminilake.spk` depuis
    [GitHub Releases](https://github.com/alexissmartconnect-art/nas-simple-media-/releases).
-5. **Centre de paquets → Installation manuelle →** sélectionnez le `.spk`. Le service démarre sur le port **8096**.
-6. **Étape obligatoire : droits sur les médias.**
-   **Panneau de configuration → Dossier partagé → (votre dossier média) → Modifier → Autorisations**
-   → donnez la **lecture** à l’utilisateur **`sc-nas-simple-media`**.
-   Sans ce réglage, le scanner ne voit aucun fichier.
-7. Ouvrez `http://IP-DU-NAS:8096`.
+3. **Centre de paquets → Installation manuelle →** sélectionnez le `.spk`.
+   Package Center installe **Node.js v22** automatiquement (seule dépendance).
+   **ffmpeg n’est pas à installer** : le paquet embarque `ffmpeg`/`ffprobe` statiques
+   (ffmpeg6/7 reste prioritaire s’il est présent, sans configuration).
+4. Le paquet crée tout seul le dossier partagé **« media »**, les sous-dossiers
+   `Movies`, `Series`, `Music`, et donne au compte de service
+   `sc-nas-simple-media` l’accès **lecture/écriture** : **aucune ACL manuelle**.
+   `MEDIA_PATH=auto` (valeur par défaut) suit ce dossier partagé, même s’il est
+   déplacé vers un autre volume.
+   L’entrée **8096/tcp** est ajoutée au pare-feu et à la redirection de ports.
+5. Ouvrez `http://IP-DU-NAS:8096` (bouton **Ouvrir** de Package Center), connectez-vous
+   avec `admin` / `ADMIN_PASSWORD` (`changeme` par défaut) : le changement de mot de passe
+   est imposé, puis l’assistant de premier démarrage propose dossiers, scan et accès externe.
+
+**Dossiers existants hors « media »** (par ex. `/volume1/video`, clé USB) :
+**Panneau de configuration → Dossier partagé → Modifier → Autorisations** →
+**Utilisateur interne du système** → `sc-nas-simple-media` → **Lecture**.
+C’est la seule autorisation manuelle : DSM 7 interdit à un paquet tiers non signé d’exécuter
+`synoacltool`/`chown` sur les volumes. L’explorateur NAS/USB de l’interface rappelle ce
+réglage lorsqu’un dossier est protégé.
+
+Le récapitulatif complet (URL, compte, chemins, ffmpeg utilisé, état SQLite) est écrit dans
+`/var/packages/nas-simple-media/var/INSTALLATION.txt`.
 
 **Mise à jour (SPK)** : téléchargez le nouveau `.spk`, puis refaites **Installation manuelle**. La configuration est conservée dans
 `/var/packages/nas-simple-media/etc/nas-simple-media.env`, et la base dans `/var/packages/nas-simple-media/var/`.
@@ -133,7 +147,7 @@ Au premier démarrage, trois bibliothèques existent déjà : `Films` → `Movie
    - **Type** : films, séries ou musique ;
    - **Chemin du dossier** : tapez-le, ou passez par **📁 Parcourir les dossiers du NAS / USB** puis **✓ Utiliser ce dossier**. Les disques USB sont proposés, par exemple `/usbshare1/Films`.
 4. **Enregistrer**. La bibliothèque est indexée tout de suite. Le bouton **Rescan** relance l’indexation plus tard si besoin.
-5. Si le dossier est vide ou illisible, revoyez l’étape 6 du §2.1 (droits pour `sc-nas-simple-media`).
+5. Si le dossier est vide ou illisible, donnez la **lecture** à `sc-nas-simple-media` (§2.1, dernier paragraphe).
 
 ---
 
@@ -374,7 +388,7 @@ L’appli **NAS Media** apparaît dans le lanceur TV avec sa bannière orange.
 | 🟢 Le `.m3u` / lien VLC d’un partage protégé ne marche plus | Le jeton d’accès du partage a expiré (12 h) | Rouvrez le lien `/s/…`, retapez le mot de passe et retéléchargez le `.m3u`. |
 | **La vidéo ne démarre pas**, ou elle saccade | Débit insuffisant ; codec non lu par l’appareil ; conversion trop lourde pour le NAS | **Baissez la qualité** (Options → 720p puis 480p). Si « Lecture directe impossible : passage en mode Compatible (HLS) » s’affiche, laissez la conversion démarrer (« Le serveur prépare le flux… »). Une seule conversion tourne à la fois par défaut (`TRANSCODE_MAX_JOBS=1`) : attendez que l’autre lecture se termine. |
 | **Impossible d’avancer loin** dans une vidéo en mode converti | Le serveur convertit depuis le début ; la partie demandée n’existe pas encore | Patientez, ou passez en **Original** / **Auto** si l’appareil sait lire le fichier : l’avance rapide est alors immédiate. Limite connue, amélioration prévue (conversion qui démarre au point de reprise). |
-| Bibliothèque vide | Droits manquants pour `sc-nas-simple-media` (SPK) ou mauvais chemin | §2.1, étape 6, puis **Rescan** dans **Administration → 📚 Bibliothèques**. |
+| Bibliothèque vide | Dossier hors « media » sans droit de lecture pour `sc-nas-simple-media`, ou mauvais chemin | §2.1 (dernier paragraphe), puis **Rescan** dans **Administration → 📚 Bibliothèques**. |
 | Le lien `/s/` contient `192.168…` | L’adresse externe n’est pas déclarée | **Administration → 🌐 Accès externe** → enregistrez l’adresse HTTPS (§3). |
 | « Trop de tentatives. Réessayez dans … s » | Protection contre les essais de mot de passe | Attendez le délai indiqué, puis vérifiez l’identifiant et le mot de passe. |
 | APK refusé à l’installation | Sources inconnues non autorisées | §5.2 (téléphone) ou §6.2 (télé). |

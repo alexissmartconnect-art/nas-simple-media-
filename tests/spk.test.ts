@@ -13,7 +13,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const SYNO_DIR = path.join(REPO_ROOT, 'synology');
 
 const PACKAGE_NAME = 'nas-simple-media';
-const TARGET_VERSION = '1.6.1';
+const TARGET_VERSION = '1.7.0';
 const TARGET_ARCH = 'geminilake';
 const TARGET_PORT = '8096';
 
@@ -38,18 +38,18 @@ describe('DSM 7 SPK metadata', () => {
     }
   });
 
-  it('targets Synology DS220+ (geminilake) at version 1.6.1', () => {
+  it('targets Synology DS220+ (geminilake) at version 1.7.0', () => {
     const info = readInfo();
     assert.equal(info.get('package'), PACKAGE_NAME);
     assert.equal(info.get('version'), TARGET_VERSION);
     assert.equal(info.get('arch'), TARGET_ARCH);
   });
 
-  it('requires DSM 7.0 or newer', () => {
+  it('requires DSM 7.2 or newer (Node.js v22 / node:sqlite)', () => {
     const osMinVer = readInfo().get('os_min_ver') ?? '';
     assert.ok(
-      compareDsmVersion(osMinVer, '7.0-40000') >= 0,
-      `os_min_ver ${osMinVer} is below 7.0-40000`
+      compareDsmVersion(osMinVer, '7.2-64570') >= 0,
+      `os_min_ver ${osMinVer} is below 7.2-64570`
     );
   });
 
@@ -61,20 +61,58 @@ describe('DSM 7 SPK metadata', () => {
     assert.equal(info.get('ctl_stop'), 'yes');
   });
 
-  it('depends on Synology Node.js v22 and SynoCommunity ffmpeg6', () => {
+  it('only hard-depends on Synology Node.js v22 (ffmpeg is bundled)', () => {
     const info = readInfo();
-    const installDeps = (info.get('install_dep_packages') ?? '').split(':');
+    const installDeps = (info.get('install_dep_packages') ?? '').split(':').filter(Boolean);
     assert.ok(
       installDeps.includes('Node.js_v22'),
       `install_dep_packages must include Node.js_v22, got: ${installDeps.join(', ')}`
     );
+    // ffmpeg6 lives in SynoCommunity, which most users have not added. Requiring
+    // it would make installation fail; the SPK ships a static ffmpeg instead.
     assert.ok(
-      installDeps.includes('ffmpeg6'),
-      `install_dep_packages must include ffmpeg6, got: ${installDeps.join(', ')}`
+      !installDeps.includes('ffmpeg6'),
+      'ffmpeg6 must not be a mandatory dependency: transcoding is bundled'
     );
 
     const startDeps = (info.get('start_dep_packages') ?? '').split(':');
     assert.ok(startDeps.includes('Node.js_v22'), 'start_dep_packages must include Node.js_v22');
+  });
+
+  it('declares the DSM resources that remove manual setup steps', () => {
+    const resource = JSON.parse(
+      fs.readFileSync(path.join(SYNO_DIR, 'conf', 'resource'), 'utf8')
+    ) as {
+      'data-share'?: { shares: Array<{ name: string; permission: { rw?: string[] }; once: boolean }> };
+      'port-config'?: { 'protocol-file': string };
+      'video-driver'?: Record<string, unknown>;
+    };
+
+    const share = resource['data-share']?.shares.find((s) => s.name === 'media');
+    assert.ok(share, 'conf/resource must create the "media" shared folder automatically');
+    assert.equal(share?.once, false, 'the media share must be reconciled on every start');
+    assert.ok(
+      share?.permission.rw?.includes('sc-nas-simple-media'),
+      'the package user must get read/write access without a manual ACL step'
+    );
+
+    assert.equal(
+      resource['port-config']?.['protocol-file'],
+      'app/port_conf/nas-simple-media.sc',
+      'conf/resource must register the port descriptor shipped in the payload'
+    );
+    assert.ok(resource['video-driver'], 'conf/resource must grant /dev/dri for VAAPI');
+  });
+
+  it('ships a valid DSM port descriptor for 8096/tcp', () => {
+    const sc = fs.readFileSync(
+      path.join(SYNO_DIR, 'port_conf', 'nas-simple-media.sc'),
+      'utf8'
+    );
+    assert.ok(sc.includes('[nas-simple-media]'), 'the .sc file must define the service section');
+    assert.ok(/title\s*=/.test(sc), 'the .sc file must define a title');
+    assert.ok(/desc\s*=/.test(sc), 'the .sc file must define a description');
+    assert.ok(/dst\.ports\s*=\s*"8096\/tcp"/.test(sc), 'the .sc file must declare 8096/tcp');
   });
 
   it('ships both package icons', () => {
@@ -126,9 +164,12 @@ describe('DSM 7 lifecycle scripts', () => {
     for (const script of [
       'scripts/preinst',
       'scripts/postinst',
+      'scripts/preupgrade',
+      'scripts/postupgrade',
       'scripts/preuninst',
       'scripts/postuninst',
       'scripts/start-stop-status',
+      'scripts/common.sh',
     ]) {
       assert.ok(fs.existsSync(path.join(SYNO_DIR, script)), `missing ${script}`);
       assert.ok(isExecutable(script), `${script} must be executable`);
@@ -159,14 +200,42 @@ describe('DSM 7 lifecycle scripts', () => {
     );
   });
 
-  it('documents the shared-folder ACL step at install time', () => {
+  it('explains that the media share needs no manual ACL, and how to grant extra folders', () => {
     const postinst = readScript('postinst');
     assert.ok(
       /SERVICE_USER/.test(postinst) || postinst.includes('sc-nas-simple-media'),
       'postinst must reference the service user'
     );
     assert.ok(/Shared Folder/.test(postinst), 'postinst must point at Shared Folder permissions');
-    assert.ok(/ACL/.test(postinst), 'postinst must explain the ACL requirement');
+    assert.ok(
+      /no manual ACL is required/i.test(postinst),
+      'postinst must say the automatic media share needs no manual ACL'
+    );
+    assert.ok(
+      /Movies, Series and Music/.test(postinst),
+      'postinst must list the folders created automatically'
+    );
+  });
+
+  it('writes the runtime configuration before the first start', () => {
+    const common = fs.readFileSync(path.join(SYNO_DIR, 'scripts', 'common.sh'), 'utf8');
+    for (const key of ['MEDIA_PATH', 'DATA_PATH', 'PORT', 'ADMIN_PASSWORD', 'TRANSCODE_ENABLED']) {
+      assert.ok(new RegExp(`^${key}=`, 'm').test(common), `common.sh must generate ${key}`);
+    }
+    assert.ok(/PUBLIC_BASE_URL=/.test(common), 'common.sh must generate PUBLIC_BASE_URL');
+    assert.ok(/TRUST_PROXY=1/.test(common), 'common.sh must generate TRUST_PROXY for reverse proxies');
+    assert.ok(/PROBE_ON_SCAN=1/.test(common), 'probing must be enabled so codecs are known up front');
+    assert.ok(
+      /^FFMPEG_PATH=$/m.test(common),
+      'FFMPEG_PATH must default to auto so ffmpeg6 is preferred when installed'
+    );
+  });
+
+  it('backs up the database before an upgrade', () => {
+    const preupgrade = readScript('preupgrade');
+    assert.ok(preupgrade.includes('backup_database'), 'preupgrade must back up the database');
+    const common = fs.readFileSync(path.join(SYNO_DIR, 'scripts', 'common.sh'), 'utf8');
+    assert.ok(/backups/.test(common), 'common.sh must write backups under var/backups');
   });
 
   it('warns before uninstalling that the database will be removed', () => {
@@ -207,7 +276,7 @@ describe('package.json wiring', () => {
     assert.ok(pkg.scripts.test.includes('tests/ui.test.ts'), 'UI smoke tests must run');
   });
 
-  it('keeps the 1.6.1 version in sync across the package files', () => {
+  it('keeps the 1.7.0 version in sync across the package files', () => {
     assert.equal(readInfo().get('version'), TARGET_VERSION);
     assert.ok(
       readScript('preinst').includes(`VERSION:-${TARGET_VERSION}`),
@@ -220,17 +289,75 @@ describe('package.json wiring', () => {
     );
   });
 
-  it('generates the external access settings in the runtime env file', () => {
-    const common = fs.readFileSync(path.join(SYNO_DIR, 'scripts', 'common.sh'), 'utf8');
-    assert.ok(/PUBLIC_BASE_URL=/.test(common), 'common.sh must generate PUBLIC_BASE_URL');
-    assert.ok(/TRUST_PROXY=1/.test(common), 'common.sh must generate TRUST_PROXY for reverse proxies');
+  it('offers a lite build when ffmpeg must not be bundled', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    assert.ok(pkg.scripts['spk:lite'], 'package.json must define an "spk:lite" script');
+    assert.ok(
+      pkg.scripts['spk:lite'].includes('--without-bundled-ffmpeg'),
+      'spk:lite must skip the bundled ffmpeg'
+    );
+  });
+});
+
+describe('bundled runtime', () => {
+  const ffmpegLib = path.join(SYNO_DIR, 'lib', 'ffmpeg.mjs');
+
+  it('pins ffmpeg and ffprobe by version and SHA-256', () => {
+    const source = fs.readFileSync(ffmpegLib, 'utf8');
+    for (const pkg of ['@ffmpeg-installer/linux-x64', '@ffprobe-installer/linux-x64']) {
+      assert.ok(source.includes(pkg), `bundled runtime must use ${pkg}`);
+    }
+    const hashes = source.match(/sha256: '[0-9a-f]{64}'/g) ?? [];
+    assert.equal(hashes.length, 2, 'both binaries must carry a pinned SHA-256');
+    const tarballs = source.match(/tarballSha256: '[0-9a-f]{64}'/g) ?? [];
+    assert.equal(tarballs.length, 2, 'both tarballs must carry a pinned SHA-256');
+  });
+
+  it('ships the GPL-3.0 text and the corresponding-source notice', () => {
+    const gpl = fs.readFileSync(path.join(SYNO_DIR, 'licenses', 'GPL-3.0.txt'), 'utf8');
+    assert.ok(gpl.includes('GNU GENERAL PUBLIC LICENSE'), 'GPL-3.0 text must be bundled');
+    assert.ok(gpl.length > 30000, 'GPL-3.0 text looks truncated');
+    const notice = fs.readFileSync(path.join(SYNO_DIR, 'licenses', 'FFMPEG-SOURCE.txt'), 'utf8');
+    assert.ok(/source/i.test(notice), 'the ffmpeg source notice must point at the sources');
+  });
+
+  it('stages the documentation and the port descriptor inside the payload', () => {
+    const build = fs.readFileSync(path.join(SYNO_DIR, 'build-spk.mjs'), 'utf8');
+    for (const staged of [
+      'app/docs',
+      'app/port_conf',
+      'app/bin/run.sh',
+      'docs/README.md',
+      'docs/DOP.md',
+      'RELEASE_NOTES.md',
+    ]) {
+      assert.ok(build.includes(staged), `build-spk.mjs must stage ${staged}`);
+    }
+    assert.ok(build.includes('stageBundledFfmpeg'), 'the builder must bundle ffmpeg by default');
+    assert.ok(
+      build.includes('--without-bundled-ffmpeg'),
+      'the builder must allow skipping the bundled ffmpeg'
+    );
+  });
+
+  it('prefers SynoCommunity ffmpeg6/7 and falls back to the bundled binaries', () => {
+    const run = fs.readFileSync(path.join(SYNO_DIR, 'bin', 'run.sh'), 'utf8');
+    assert.ok(run.includes('/var/packages/ffmpeg6/target/bin'), 'run.sh must look for ffmpeg6');
+    assert.ok(run.includes('/var/packages/ffmpeg7/target/bin'), 'run.sh must look for ffmpeg7');
+    assert.ok(run.includes('${APPDIR}/bin/ffmpeg'), 'run.sh must fall back to the bundled ffmpeg');
+    // PATH is searched before the bundled binary, so ffmpeg6 wins when installed.
+    const pathIdx = run.indexOf('command -v "${_name}"');
+    const bundledIdx = run.indexOf('[ -x "${_bundled}" ]');
+    assert.ok(pathIdx !== -1 && bundledIdx !== -1 && pathIdx < bundledIdx, 'ffmpeg6 must be preferred');
   });
 });
 
 describe('release artefacts stay out of git', () => {
   it('ignores node_modules, dist and the .spk', () => {
     const ignore = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8');
-    for (const pattern of ['node_modules/', 'dist/', '*.spk', 'dist-spk/', 'synology/package/']) {
+    for (const pattern of ['node_modules/', 'dist/', '*.spk', 'dist-spk/', 'synology/package/', '.cache/']) {
       assert.ok(ignore.includes(pattern), `.gitignore must ignore ${pattern}`);
     }
   });
@@ -245,7 +372,7 @@ describe('release artefacts stay out of git', () => {
       }
     };
     for (const artefact of [
-      'dist-spk/nas-simple-media-1.6.1-geminilake.spk',
+      'dist-spk/nas-simple-media-1.7.0-geminilake.spk',
       'synology/package/app/dist/index.js',
       'node_modules/express/package.json',
       'dist/index.js',

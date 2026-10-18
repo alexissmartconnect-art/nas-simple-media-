@@ -215,19 +215,24 @@ Paquet natif ciblant la **DS220+** (arch `geminilake`, DSM 7.x), sans Docker.
 
 Sans ce réglage, DSM refuse d’installer un paquet non signé par Synology.
 
-### 2. Installer les dépendances
+### 2. Une seule dépendance : Node.js v22
 
 | Paquet | Source | Pourquoi |
 |---|---|---|
-| **Node.js v22** | Synology (DSM **7.2** minimum) | Moteur JavaScript. `node:sqlite` est intégré à Node ≥ 22.5 : **aucun module natif à compiler**. |
-| **ffmpeg6** | [SynoCommunity](https://packages.synocommunity.com) | Transcodage « Compatible » (HLS, Remux direct, AAC Stéréo/5.1), **ffprobe** (détection DTS/5.1), miniatures, sous-titres. |
+| **Node.js v22** | Synology (DSM **7.2** minimum) | Moteur JavaScript. `node:sqlite` est intégré à Node ≥ 22.5 : **aucun module natif à compiler**. Package Center l’installe automatiquement. |
 
-```bash
-# Dépôt SynoCommunity (pour ffmpeg6) :
-#   Centre de paquets → Paramètres → Sources de paquets → Ajouter
-#   Nom      : SynoCommunity
-#   Emplacement : https://packages.synocommunity.com
-```
+**ffmpeg n’est plus à installer.** Le SPK embarque `ffmpeg` 4.1 et `ffprobe` 5.2
+statiques (GPL-3.0, sources et licence incluses) dans `target/app/bin/` :
+
+- transcodage « Compatible » (HLS), Remux direct, AAC Stéréo/5.1 ;
+- analyse des codecs (DTS, HEVC 10 bits, 5.1…), miniatures, sous-titres ;
+- décodage matériel Intel (VAAPI) si vous activez `TRANSCODE_HWACCEL=vaapi`
+  (le paquet reçoit l’accès à `/dev/dri` via `conf/resource`).
+
+Si le paquet **ffmpeg6/ffmpeg7** de [SynoCommunity](https://packages.synocommunity.com)
+est présent, il est **utilisé en priorité** (plus récent) ; le binaire embarqué sert de
+repli. `FFMPEG_PATH` / `FFPROBE_PATH` forcent un chemin précis. Aucun dépôt
+supplémentaire n’est donc nécessaire pour installer et transcoder.
 
 > **Note sur `nodejs20`** — le paquet SPK déclare `Node.js_v22` et non `nodejs20`.
 > `nodejs20` n’existe pas chez SynoCommunity (qui ne publie aucun paquet Node) :
@@ -240,30 +245,50 @@ Sans ce réglage, DSM refuse d’installer un paquet non signé par Synology.
 ### 3. Installer le paquet
 
 **Centre de paquets → Installation manuelle →** sélectionner
-`nas-simple-media-<version>-geminilake.spk` (dernière version : **1.6.1**).
+`nas-simple-media-<version>-geminilake.spk` (dernière version : **1.7.0**).
 
-Le service démarre automatiquement sur le port **8096**.
+Le paquet s’installe **sans configuration à saisir** et démarre automatiquement sur le port
+**8096**. Il crée tout seul :
 
-### 4. Donner l’accès aux médias (ACL) — *étape obligatoire*
+- le dossier partagé **« media »** (`conf/resource` → `data-share`), avec l’accès
+  **lecture/écriture** au compte de service `sc-nas-simple-media` — **aucune ACL ni
+  commande `synoacltool` n’est nécessaire** ;
+- les sous-dossiers `Movies`, `Series` et `Music`, scannés au premier lancement
+  (`MEDIA_PATH=auto` suit le dossier partagé « media » même s’il change de volume) ;
+- `etc/nas-simple-media.env` (médias, données, port, mot de passe initial, proxy,
+  transcodage) et `var/INSTALLATION.txt` (récapitulatif : URL, compte, chemins,
+  ffmpeg utilisé) ;
+- l’entrée **8096/tcp** dans les services du pare-feu et de la redirection de ports.
 
-Le service tourne sous l’utilisateur dédié **`sc-nas-simple-media`** (jamais root).
+Le bouton **Ouvrir** de Package Center lance l’interface. Le compte `admin` utilise
+`ADMIN_PASSWORD` (`changeme` par défaut) et le changement de mot de passe est **imposé**
+à la première connexion.
+
+### 4. Déposer vos médias
+
+Copiez vos films, séries et musique dans `/volume1/media/Movies`, `.../Series`,
+`.../Music`, ou utilisez l’**explorateur NAS/USB** intégré
+(*Administration → Bibliothèques → Parcourir*) pour pointer une bibliothèque vers un
+dossier existant. Pour un dossier **existant hors « media »**, accordez-lui la lecture :
 
 **Panneau de configuration → Dossier partagé → Modifier → Autorisations**
-→ accordez **lecture** (et parcours) sur `sc-nas-simple-media` pour vos dossiers de médias.
+→ **Utilisateur interne du système** → `sc-nas-simple-media` → **Lecture**.
 
-> Sans cette ACL, le scanner ne voit aucun fichier. C’est le seul réglage manuel requis.
+> C’est la seule autorisation manuelle possible : DSM 7 interdit à un paquet tiers
+> non signé d’exécuter `synoacltool` ou `chown` sur les volumes. Le dossier « media »,
+> lui, est déjà configuré.
 
-### 5. Ouvrir l’interface
+### 5. Vérifier l’installation
 
-`http://IP-DU-NAS:8096` → identifiant **`admin`**, mot de passe = `ADMIN_PASSWORD`
-(valeur par défaut `changeme`, à changer dans
-`/var/packages/nas-simple-media/etc/nas-simple-media.env`).
+`var/INSTALLATION.txt` et le journal `var/nas-simple-media.log` donnent l’URL, le
+port, le ffmpeg retenu et l’état de la base SQLite. En cas de souci :
+`sudo /var/packages/nas-simple-media/scripts/start-stop-status status`.
 
 ### Chemins utiles
 
 | Chemin | Contenu |
 |---|---|
-| `/var/packages/nas-simple-media/target/app/` | Application (Node.js + `node_modules`) |
+| `/var/packages/nas-simple-media/target/app/` | Application (Node.js + `node_modules` + `bin/ffmpeg`) |
 | `/var/packages/nas-simple-media/etc/nas-simple-media.env` | Configuration |
 | `/var/packages/nas-simple-media/var/` | Base SQLite, métadonnées de partage, cache HLS |
 | `/var/packages/nas-simple-media/var/nas-simple-media.log` | Journal du service |
@@ -288,9 +313,10 @@ Identiques à la section [Variables d’environnement](#variables-denvironnement
 
 ```bash
 npm ci
-npm test          # 157 tests
+npm test          # 165 tests
 npm run build
-npm run spk       # -> dist-spk/nas-simple-media-1.6.1-geminilake.spk
+npm run spk       # -> dist-spk/nas-simple-media-1.7.0-geminilake.spk (ffmpeg inclus)
+npm run spk:lite  # variante sans ffmpeg embarqué (ffmpeg6 requis à l’exécution)
 ```
 
 Le `.spk` n’est **jamais** commité : c’est un artefact de release, publié sur

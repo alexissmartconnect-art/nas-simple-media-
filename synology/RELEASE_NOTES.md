@@ -1,3 +1,35 @@
+## NAS Simple Media 1.7.0 — Installation en un clic
+
+- **ffmpeg inclus dans le paquet** : les binaires statiques `ffmpeg` 4.1 et `ffprobe` 5.2
+  (GPL-3.0, sources et licence fournies) sont livrés dans `app/bin`. La lecture
+  « Compatible » (HLS), l’analyse des codecs, les vignettes et les sous-titres fonctionnent
+  donc dès l’installation, **sans le dépôt SynoCommunity**. Si `ffmpeg6`/`ffmpeg7` est
+  installé, il reste utilisé en priorité ; `FFMPEG_PATH` permet de forcer un binaire.
+- **Dossier partagé « media » créé automatiquement** : DSM le crée au démarrage et donne
+  au compte de service `sc-nas-simple-media` l’accès lecture/écriture. Plus aucune commande
+  `synoacltool` ni réglage d’autorisation n’est nécessaire pour ce dossier ; les
+  sous-dossiers `Movies`, `Series` et `Music` sont créés et scannés au premier lancement.
+- **Dépendance unique : Node.js v22** : Package Center l’installe automatiquement.
+  `ffmpeg6` n’est plus une dépendance obligatoire, une installation sans SynoCommunity
+  ne peut donc plus échouer. DSM 7.2 minimum (moteur SQLite intégré à Node).
+- **Port 8096 déclaré à DSM** : entrée `8096/tcp` dans les services du pare-feu et de la
+  redirection de ports, accès direct via le bouton « Ouvrir » de Package Center.
+- **Configuration générée à l’installation** : `etc/nas-simple-media.env` (chemin des
+  médias, données, port, mot de passe initial, proxy, transcodage) est écrit puis conservé
+  lors des mises à jour. `ADMIN_PASSWORD=changeme` impose le changement au premier login.
+- **Mises à jour sûres** : sauvegarde automatique de `library.db` dans `var/backups`
+  avant chaque mise à niveau (5 dernières conservées), redémarrage attendu sur `/health`,
+  rotation du journal à 5 Mo.
+- **Diagnostic intégré** : `var/INSTALLATION.txt` récapitule l’URL, le compte, les dossiers
+  et le ffmpeg utilisé ; l’interface web affiche un avertissement si ffmpeg manque.
+- **Documentation embarquée** : `app/docs/{README,DOP,env.example,LICENSE,RELEASE_NOTES}.md`.
+- **Limites connues** : paquet `geminilake` (DS220+, DS420+, DS720+, DS920+…) ; DSM
+  demande d’autoriser les éditeurs tiers pour installer un paquet non signé ; les dossiers
+  existants (hors partage « media ») nécessitent toujours l’autorisation de lecture pour
+  `sc-nas-simple-media` (expliqué dans l’interface et dans le rapport d’installation) ;
+  le ffmpeg embarqué est volontairement ancien (décodage HEVC 10 bits et encodage VAAPI,
+  pas d’AV1).
+
 ## NAS Simple Media 1.6.1 — Cohérence de la documentation et de la publication
 
 - **Configuration documentée** : `.env.example` rassemble les variables de configuration

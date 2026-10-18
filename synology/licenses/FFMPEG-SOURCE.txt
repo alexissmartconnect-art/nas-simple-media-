@@ -1,0 +1,32 @@
+Bundled static ffmpeg / ffprobe — source and licence notice
+===========================================================
+
+NAS Simple Media bundles two unmodified, statically linked Linux x86-64
+binaries so that "Compatible" (HLS) playback, thumbnails and subtitle
+extraction work immediately after installing the SPK, without requiring a
+third-party package repository.
+
+  ffmpeg   N-47683-g0e8eb07980-static   (FFmpeg 4.1 branch, 2018)
+           from https://www.johnvansickle.com/ffmpeg/
+           distributed as npm package @ffmpeg-installer/linux-x64 4.1.0
+
+  ffprobe  N-66595-gc2b38619c0-static   (FFmpeg 5.2 branch, 2023)
+           from https://www.johnvansickle.com/ffmpeg/
+           distributed as npm package @ffprobe-installer/linux-x64 5.2.0
+
+Both builds were configured with --enable-gpl --enable-version3 and therefore
+are licensed under the GNU General Public License version 3 or later.  The full
+licence text is in GPL-3.0.txt next to this file.
+
+Corresponding source code:
+  https://ffmpeg.org/releases/ffmpeg-4.1.tar.xz
+  https://ffmpeg.org/releases/ffmpeg-5.2.tar.xz
+  Build scripts: https://johnvansickle.com/ffmpeg/release-source/
+
+The package maintainer can provide the corresponding source on request via the
+project issue tracker: https://github.com/alexissmartconnect-art/nas-simple-media-/issues
+
+If the SynoCommunity "ffmpeg6" package is installed, NAS Simple Media uses it
+instead (newer codecs, hardware acceleration); the bundled binaries are only a
+fallback.  Set FFMPEG_PATH / FFPROBE_PATH in
+/var/packages/nas-simple-media/etc/nas-simple-media.env to override either one.

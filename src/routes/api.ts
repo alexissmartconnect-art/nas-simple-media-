@@ -85,6 +85,7 @@ import {
   getSegmentFile,
   readPlaylist,
   isTranscodeEnabled,
+  transcodeDisabledReason,
   touchJob,
   listTranscodeJobs,
   activeTranscodeCount,
@@ -286,6 +287,9 @@ apiRouter.get('/setup/status', (req, res) => {
     defaultAdminUser: lan ? 'admin' : null,
     defaultAdminActive: lan ? isDefaultAdminPasswordActive() : false,
     passwordMinLength: config.PASSWORD_MIN_LENGTH,
+    // Not sensitive: lets the UI explain why Compatible is unavailable.
+    ffmpegAvailable: config.FFMPEG_AVAILABLE,
+    ffprobeAvailable: config.FFPROBE_AVAILABLE,
   });
 });
 
@@ -859,7 +863,7 @@ apiRouter.get('/stream/:id/hls', (req, res) => {
   }
   if (!isTranscodeEnabled()) {
     res.status(503).json({
-      error: 'Transcodage désactivé. Utilisez Direct ou VLC.',
+      error: transcodeDisabledReason() ?? 'Transcodage désactivé. Utilisez Direct ou VLC.',
       enabled: false,
     });
     return;
@@ -963,6 +967,8 @@ apiRouter.get('/status', requireAuth, (req, res) => {
     user,
     transcode: {
       enabled: isTranscodeEnabled(),
+      ffmpegAvailable: config.FFMPEG_AVAILABLE,
+      ffprobeAvailable: config.FFPROBE_AVAILABLE,
       maxJobs: config.TRANSCODE_MAX_JOBS,
       ffmpegPath: config.FFMPEG_PATH,
       hwaccel: config.TRANSCODE_HWACCEL,
